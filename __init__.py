@@ -1,36 +1,29 @@
-"""Paranoy native Hermes plugin. Structure only: register, do not sign or call out."""
+"""Paranoy native Hermes plugin. Signs on the agent's behalf."""
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from pathlib import Path
 
-from . import gates, schemas, signing
+from . import gates, schemas, state
+from .client import ParanoyClient, PluginError
+from .runtime import now_iso
+from .signing import SecretError, generate_and_store, load_secret_hex
 from .tools import governance, read, write
+from .tools.read import status as live_status
 
 logger = logging.getLogger(__name__)
-
-_TOOL_GROUPS = (read.TOOLS, write.TOOLS, governance.TOOLS)
-
-
-def pre_llm_call(**kwargs):
-    """No-op. Do not log the user message or any secret."""
-    del kwargs
-    return None
-
-
-def post_tool_call(**kwargs):
-    """No-op. Do not log tool arguments or results; they might carry a secret."""
-    del kwargs
-    return None
+_NSEC = re.compile(r"nsec1[02-9ac-hj-np-z]+")
 
 
 def register(ctx):
-    """Register skills, slash and CLI stubs, hooks, and gated tools.
+    """Register skills, commands, hooks, and tools.
 
-    A missing ``PARANOY_BOT_SECRET_HEX`` does not stop this function. Data
-    tools stay hidden until ``check_fn`` sees a key and, where the mode
-    needs one, a collection.
+    A missing PARANOY_BOT_SECRET_HEX does not stop registration. Data tools
+    stay hidden until a key is stored and, where the mode needs one, a
+    collection is pinned.
     """
     skills_dir = Path(__file__).resolve().parent / "skills"
     descriptions = {
@@ -46,9 +39,28 @@ def register(ctx):
             description=descriptions[skill_name],
         )
 
+    def settings_factory():
+        return gates.read_settings(ctx)
+
+    def service_factory(settings):
+        try:
+            secret_hex = load_secret_hex()
+        except SecretError as exc:
+            raise PluginError(str(exc)) from exc
+        return ParanoyClient(settings["server_url"], secret_hex)
+
     def slash(raw_args: str = "", **kwargs) -> str:
         del kwargs
-        return gates.slash_result(gates.read_settings(ctx), raw_args)
+        parts = (raw_args or "").split()
+        command = parts[0].lower() if parts else "status"
+        settings = settings_factory()
+        if command == "status" and len(parts) == 1 and settings.get("key_configured"):
+            try:
+                payload = live_status(service_factory(settings), settings, {})
+                return json.dumps(payload, ensure_ascii=False)
+            except PluginError as exc:
+                return gates.status_text(settings) + "\nserver: " + str(exc)
+        return gates.slash_result(ctx, raw_args)
 
     ctx.register_command(
         "paranoy",
@@ -60,22 +72,22 @@ def register(ctx):
     def cli(args) -> None:
         command = getattr(args, "paranoy_command", None)
         if command == "status":
-            print(gates.status_text(gates.read_settings(ctx)))
+            print(slash("status"))
             return
         if command == "keygen":
-            print(
-                "paranoy keygen is not implemented. A later version will "
-                "generate a key and store it with Hermes as "
-                f"{schemas.SECRET_ENV}. This command does not create or "
-                "print a secret."
-            )
+            def save(key, value):
+                from hermes_cli.config import save_env_value
+
+                save_env_value(key, value)
+
+            print(generate_and_store(save))
             return
         print("Usage: hermes paranoy <status|keygen>")
 
     def setup_cli(subparser) -> None:
         subs = subparser.add_subparsers(dest="paranoy_command")
-        subs.add_parser("status", help="Show mode, collection, and whether a key is configured")
-        subs.add_parser("keygen", help="Generate an agent key through Hermes (not implemented)")
+        subs.add_parser("status", help="Show mode, npub, and whether a key is configured")
+        subs.add_parser("keygen", help="Generate an agent key and store it with Hermes")
         subparser.set_defaults(func=cli)
 
     ctx.register_cli_command(
@@ -85,36 +97,76 @@ def register(ctx):
         handler_fn=cli,
     )
 
+    def pre_llm_call(**kwargs):
+        del kwargs
+        try:
+            return {"context": gates.prompt_context(settings_factory())}
+        except Exception:
+            return None
+
     def pre_tool_call(**kwargs):
-        return gates.pre_tool_directive(
-            ctx, kwargs.get("tool_name"), kwargs.get("args")
+        return gates.pre_tool_directive(ctx, kwargs.get("tool_name"), kwargs.get("args"))
+
+    def post_tool_call(**kwargs):
+        name = gates.bare_tool_name(kwargs.get("tool_name"))
+        if name not in schemas.ALL_TOOL_NAMES:
+            return None
+        raw = kwargs.get("result")
+        if not isinstance(raw, str):
+            return None
+        cleaned = _NSEC.sub("[redacted]", raw)
+        try:
+            payload = json.loads(cleaned)
+        except ValueError:
+            return None
+        if not isinstance(payload, dict) or payload.get("error"):
+            return None
+        accepted = payload.get("accepted")
+        if isinstance(accepted, list) and accepted:
+            state.append_jsonl(
+                "accepted.jsonl",
+                {"tool": name, "ids": accepted, "at": now_iso()},
+            )
+        try:
+            settings = settings_factory()
+        except Exception:
+            settings = {}
+        role = settings.get("active_role") or settings.get("mode") or "none"
+        state.checkpoint(
+            role,
+            {
+                "tool": name,
+                "at": now_iso(),
+                "collection": settings.get("collection") or "",
+                "overview": name == "paranoy_update_overview",
+            },
         )
+        return None
 
     ctx.register_hook("pre_llm_call", pre_llm_call)
     ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("post_tool_call", post_tool_call)
 
-    def make_check(group: str, tool_name: str):
+    def make_check(tool_name):
         def check_fn() -> bool:
             try:
-                return gates.tool_visible(gates.read_settings(ctx), group, tool_name)
+                return gates.tool_visible(settings_factory(), tool_name)
             except Exception:
                 return False
 
         return check_fn
 
-    for group_tools in _TOOL_GROUPS:
-        for spec in group_tools:
-            ctx.register_tool(
-                name=spec["name"],
-                toolset="paranoy",
-                schema=spec["schema"],
-                handler=spec["handler"],
-                check_fn=make_check(spec["group"], spec["name"]),
-            )
+    for spec in (
+        *read.build(service_factory, settings_factory),
+        *write.build(service_factory, settings_factory),
+        *governance.build(service_factory, settings_factory),
+    ):
+        ctx.register_tool(
+            name=spec["name"],
+            toolset="paranoy",
+            schema=spec["schema"],
+            handler=spec["handler"],
+            check_fn=make_check(spec["name"]),
+        )
 
-    logger.debug(
-        "paranoy scaffold registered %d tools; signing is %s",
-        len(schemas.ALL_TOOL_NAMES),
-        signing.describe(),
-    )
+    logger.debug("paranoy registered %d tools", len(schemas.ALL_TOOL_NAMES))

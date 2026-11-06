@@ -34,10 +34,10 @@ Administer collections. Do not add evidence, claims, links, or contradictions. C
 
 ## What you may change
 
-- **Members (kind 4705).** `replace_members` replaces the whole list. Keep every member who should remain, including the owner. A partial list removes everyone you leave out. Fetch, merge, and preview before asking for approval.
-- **Topic and visibility (kind 4709).** `set_topic` sets the one-line topic (at most 140 characters) and whether the collection is public.
-- **Admins (kind 4710), and only when this key is the owner.** `replace_admins` replaces the whole list. Leave the owner's pubkey out. An admin cannot change the admin list. Fetch, merge, and preview before asking for approval.
-- **Create a collection.** `create_collection` opens a collection this key owns. Pass `owner` only when this key is already a steward and the new collection should belong to that grantor (kind 4712).
+- **Members (kind 4705).** `paranoy_add_members` and `paranoy_remove_members` name who to add or remove. The plugin fetches the roster, previews the change, and publishes the complete list. Do not hand it a replacement list. The owner cannot be removed. Wiping everyone except the owner needs `confirm_owner_only`.
+- **Topic and visibility (kind 4709).** `paranoy_set_topic` sets the one-line topic (at most 140 characters) and whether the collection is public.
+- **Admins (kind 4710), and only when this key is the owner.** `paranoy_set_admins` adds or removes admins. The plugin fetches the current list and leaves the owner's pubkey out. An admin cannot change the admin list.
+- **Create a collection.** `paranoy_create_collection` opens a collection this key owns. Pass `owner` only when this key is already a steward and the new collection should belong to that grantor (kind 4712).
 
 Kind 4705 and kind 4710 always require approval, even when other writes would not.
 

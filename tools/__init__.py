@@ -1,4 +1,4 @@
-"""Paranoy tool handlers. Every body is a stub."""
+"""Paranoy tool handlers."""
 
 from . import governance, read, write
 

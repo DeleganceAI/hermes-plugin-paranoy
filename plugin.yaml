@@ -1,14 +1,14 @@
 name: paranoy
-version: "0.1.0"
+version: "0.2.0"
 manifest_version: 2
 api_version: 1
 description: >
   Native Hermes plugin for a Paranoy evidence ledger. The agent key stays in
-  Hermes as PARANOY_BOT_SECRET_HEX; the model never holds it. This version
-  only registers stubs. It does not sign events, call the network, or write
-  files. Later releases will call the configured server over HTTPS, fetch
-  public http(s) documents, and write an overview file under the Hermes
-  plugin data directory.
+  Hermes as PARANOY_BOT_SECRET_HEX; the model never holds it. Reads and
+  allowed writes are signed in-process and sent to server_url/mcp over
+  HTTPS. fetch_url asks that server to fetch public http(s) documents.
+  Rejects, the Ponder journal, role checkpoints, and overview.md are written
+  under the Hermes plugin data directory.
 author: DeleganceAI
 license: GPL-3.0
 homepage: https://github.com/DeleganceAI/hermes-plugin-paranoy
@@ -18,27 +18,33 @@ python_dependencies:
   - "coincurve>=18,<22"
   - "httpx>=0.27,<0.29"
 provides_tools:
-  - list_collections
-  - fetch_url
-  - get_event
-  - search_claims
-  - list_claims
-  - get_links
-  - list_evidence
-  - search_contradictions
-  - check_proof
-  - add_evidence
-  - add_claim
-  - add_link
-  - add_contradiction
-  - list_members
-  - list_delegations
-  - replace_members
-  - set_topic
-  - replace_admins
-  - create_collection
-  - replace_account_agents
-  - replace_collection_agents
+  - paranoy_list_collections
+  - paranoy_list_members
+  - paranoy_list_delegations
+  - paranoy_search_claims
+  - paranoy_list_claims
+  - paranoy_list_evidence
+  - paranoy_get_event
+  - paranoy_get_links
+  - paranoy_search_contradictions
+  - paranoy_check_proof
+  - paranoy_fetch_url
+  - paranoy_status
+  - paranoy_add_evidence
+  - paranoy_add_claim
+  - paranoy_add_link
+  - paranoy_add_contradiction
+  - paranoy_log_reject
+  - paranoy_journal
+  - paranoy_set_active_role
+  - paranoy_set_topic
+  - paranoy_add_members
+  - paranoy_remove_members
+  - paranoy_set_admins
+  - paranoy_create_collection
+  - paranoy_update_overview
+  - paranoy_set_collection_agents
+  - paranoy_set_account_agents
 provides_hooks:
   - pre_llm_call
   - pre_tool_call
@@ -48,7 +54,7 @@ config_schema:
     type: str
     default: "https://paranoy.org"
     label: Server URL
-    description: Paranoy server base URL. Later releases call it over HTTPS.
+    description: Paranoy server base URL. Tool calls go to this origin plus /mcp.
   collection:
     type: str
     default: ""
@@ -82,7 +88,7 @@ config_schema:
     type: str
     default: ""
     label: Owner
-    description: Who this agent works for. Blank means the owner. Injected into skill context later.
+    description: Who this agent works for. Blank means the owner. Filled into skill context on each turn.
   report_to:
     type: str
     default: ""
@@ -92,7 +98,7 @@ config_schema:
     type: str
     default: ""
     label: Agent name
-    description: Name for the kind 0 agent profile. The signing client publishes it later.
+    description: Name for the kind 0 agent profile published with the first allowed write.
   agent_about:
     type: str
     default: ""
@@ -114,7 +120,7 @@ config_schema:
     type: bool
     default: true
     label: Auto-sign terms
-    description: Sign kind 4706 terms before the first write once the signing client exists.
+    description: Sign kind 4706 terms and a kind 0 profile before the first allowed write.
   terms_version:
     type: str
     default: "1"
