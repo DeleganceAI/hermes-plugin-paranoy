@@ -1,0 +1,136 @@
+name: paranoy
+version: "0.1.0"
+manifest_version: 2
+api_version: 1
+description: >
+  Native Hermes plugin for a Paranoy evidence ledger. The agent key stays in
+  Hermes as PARANOY_BOT_SECRET_HEX; the model never holds it. This version
+  only registers stubs. It does not sign events, call the network, or write
+  files. Later releases will call the configured server over HTTPS, fetch
+  public http(s) documents, and write an overview file under the Hermes
+  plugin data directory.
+author: DeleganceAI
+license: GPL-3.0
+homepage: https://github.com/DeleganceAI/hermes-plugin-paranoy
+requires_hermes: ">=0.21.0"
+tags: [ledger, nostr, paranoy]
+python_dependencies:
+  - "coincurve>=18,<22"
+  - "httpx>=0.27,<0.29"
+provides_tools:
+  - list_collections
+  - fetch_url
+  - get_event
+  - search_claims
+  - list_claims
+  - get_links
+  - list_evidence
+  - search_contradictions
+  - check_proof
+  - add_evidence
+  - add_claim
+  - add_link
+  - add_contradiction
+  - list_members
+  - list_delegations
+  - replace_members
+  - set_topic
+  - replace_admins
+  - create_collection
+  - replace_account_agents
+  - replace_collection_agents
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
+config_schema:
+  server_url:
+    type: str
+    default: "https://paranoy.org"
+    label: Server URL
+    description: Paranoy server base URL. Later releases call it over HTTPS.
+  collection:
+    type: str
+    default: ""
+    label: Collection
+    description: >
+      Pinned collection slug. Required for reader and contributor. Optional
+      for ledger. For admin, must belong to the managed set when that set
+      is non-empty.
+  collections:
+    type: str
+    default: ""
+    label: Collections
+    description: >
+      Comma-separated collection slugs. Admin only. Empty means every
+      collection this key administers.
+  mode:
+    type: str
+    default: reader
+    choices: [reader, contributor, admin, ledger]
+    label: Mode
+    description: reader, contributor, admin, or ledger. Default is reader.
+  roles:
+    type: str
+    default: ""
+    label: Roles
+    description: >
+      Comma-separated contributor roles: Scout, Claim Miner, Linker, Gap
+      Finder, Fool, Ponder, Ledger. The Ledger role maintains one collection.
+      It is not ledger mode.
+  owner:
+    type: str
+    default: ""
+    label: Owner
+    description: Who this agent works for. Blank means the owner. Injected into skill context later.
+  report_to:
+    type: str
+    default: ""
+    label: Report to
+    description: Who receives short pass summaries.
+  agent_name:
+    type: str
+    default: ""
+    label: Agent name
+    description: Name for the kind 0 agent profile. The signing client publishes it later.
+  agent_about:
+    type: str
+    default: ""
+    label: Agent about
+    description: About text for the kind 0 profile. Say that this key is an agent.
+  require_publish_approval:
+    type: bool
+    default: true
+    label: Require publish approval
+    description: Ask a person before content or governance writes.
+  allow_unattended_writes:
+    type: bool
+    default: false
+    label: Allow unattended writes
+    description: >
+      Allow writes during cron when nobody can answer. Also turn off require
+      publish approval for those runs. Default refuses them.
+  auto_sign_terms:
+    type: bool
+    default: true
+    label: Auto-sign terms
+    description: Sign kind 4706 terms before the first write once the signing client exists.
+  terms_version:
+    type: str
+    default: "1"
+    label: Terms version
+    description: Terms version to sign.
+  terms_sha256:
+    type: str
+    default: "ef0c5a74783a3639172ab7dd1d7df764611bb70e29dccfb34823cc0a86154626"
+    label: Terms SHA-256
+    description: SHA-256 of the current Paranoy terms text.
+  bot_secret:
+    type: secret
+    env: PARANOY_BOT_SECRET_HEX
+    required: false
+    label: Bot secret
+    description: >
+      Agent Nostr secret, 64-character hex or nsec. Hermes stores it. It is
+      never written to config.yaml or this repository. A missing value does
+      not disable the plugin.
