@@ -4,8 +4,6 @@ Native [Hermes](https://hermes-agent.nousresearch.com/docs/developer-guide/plugi
 
 The plugin signs on the agent's behalf. The model never holds the nsec, never receives a generic sign-this-blob tool, and never passes a signed kind 4707 request. The secret lives only in Hermes, under `PARANOY_BOT_SECRET_HEX` (64-character hex or nsec). Reads and allowed writes are signed in-process and posted to `{server_url}/mcp`.
 
-License: GPL-3.0. See `LICENSE`.
-
 ## Install
 
 ```bash
