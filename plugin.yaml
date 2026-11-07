@@ -1,0 +1,142 @@
+name: paranoy
+version: "0.2.0"
+manifest_version: 2
+api_version: 1
+description: >
+  Native Hermes plugin for a Paranoy evidence ledger. The agent key stays in
+  Hermes as PARANOY_BOT_SECRET_HEX; the model never holds it. Reads and
+  allowed writes are signed in-process and sent to server_url/mcp over
+  HTTPS. fetch_url asks that server to fetch public http(s) documents.
+  Rejects, the Ponder journal, role checkpoints, and overview.md are written
+  under the Hermes plugin data directory.
+author: DeleganceAI
+license: GPL-3.0
+homepage: https://github.com/DeleganceAI/hermes-plugin-paranoy
+requires_hermes: ">=0.21.0"
+tags: [ledger, nostr, paranoy]
+python_dependencies:
+  - "coincurve>=18,<22"
+  - "httpx>=0.27,<0.29"
+provides_tools:
+  - paranoy_list_collections
+  - paranoy_list_members
+  - paranoy_list_delegations
+  - paranoy_search_claims
+  - paranoy_list_claims
+  - paranoy_list_evidence
+  - paranoy_get_event
+  - paranoy_get_links
+  - paranoy_search_contradictions
+  - paranoy_check_proof
+  - paranoy_fetch_url
+  - paranoy_status
+  - paranoy_add_evidence
+  - paranoy_add_claim
+  - paranoy_add_link
+  - paranoy_add_contradiction
+  - paranoy_log_reject
+  - paranoy_journal
+  - paranoy_set_active_role
+  - paranoy_set_topic
+  - paranoy_add_members
+  - paranoy_remove_members
+  - paranoy_set_admins
+  - paranoy_create_collection
+  - paranoy_update_overview
+  - paranoy_set_collection_agents
+  - paranoy_set_account_agents
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
+config_schema:
+  server_url:
+    type: str
+    default: "https://paranoy.org"
+    label: Server URL
+    description: Paranoy server base URL. Tool calls go to this origin plus /mcp.
+  collection:
+    type: str
+    default: ""
+    label: Collection
+    description: >
+      Pinned collection slug. Required for reader and contributor. Optional
+      for ledger. For admin, must belong to the managed set when that set
+      is non-empty.
+  collections:
+    type: str
+    default: ""
+    label: Collections
+    description: >
+      Comma-separated collection slugs. Admin only. Empty means every
+      collection this key administers.
+  mode:
+    type: str
+    default: reader
+    choices: [reader, contributor, admin, ledger]
+    label: Mode
+    description: reader, contributor, admin, or ledger. Default is reader.
+  roles:
+    type: str
+    default: ""
+    label: Roles
+    description: >
+      Comma-separated contributor roles: Scout, Claim Miner, Linker, Gap
+      Finder, Fool, Ponder, Ledger. The Ledger role maintains one collection.
+      It is not ledger mode.
+  owner:
+    type: str
+    default: ""
+    label: Owner
+    description: Who this agent works for. Blank means the owner. Filled into skill context on each turn.
+  report_to:
+    type: str
+    default: ""
+    label: Report to
+    description: Who receives short pass summaries.
+  agent_name:
+    type: str
+    default: ""
+    label: Agent name
+    description: Name for the kind 0 agent profile published with the first allowed write.
+  agent_about:
+    type: str
+    default: ""
+    label: Agent about
+    description: About text for the kind 0 profile. Say that this key is an agent.
+  require_publish_approval:
+    type: bool
+    default: true
+    label: Require publish approval
+    description: Ask a person before content or governance writes.
+  allow_unattended_writes:
+    type: bool
+    default: false
+    label: Allow unattended writes
+    description: >
+      Allow writes during cron when nobody can answer. Also turn off require
+      publish approval for those runs. Default refuses them.
+  auto_sign_terms:
+    type: bool
+    default: true
+    label: Auto-sign terms
+    description: Sign kind 4706 terms and a kind 0 profile before the first allowed write.
+  terms_version:
+    type: str
+    default: "1"
+    label: Terms version
+    description: Terms version to sign.
+  terms_sha256:
+    type: str
+    default: "ef0c5a74783a3639172ab7dd1d7df764611bb70e29dccfb34823cc0a86154626"
+    label: Terms SHA-256
+    description: SHA-256 of the current Paranoy terms text.
+  bot_secret:
+    type: secret
+    env: PARANOY_BOT_SECRET_HEX
+    required: false
+    label: Bot secret
+    description: >
+      Agent Nostr secret, 64-character hex or nsec. Hermes stores it. It is
+      never written to config.yaml or this repository. A missing value does
+      not disable the plugin.
