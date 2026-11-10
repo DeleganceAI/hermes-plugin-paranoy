@@ -1,5 +1,5 @@
 name: paranoy
-version: "0.3.0"
+version: "0.4.0"
 manifest_version: 2
 api_version: 1
 description: >
@@ -45,6 +45,11 @@ provides_tools:
   - paranoy_set_collection_agents
   - paranoy_set_account_agents
   - paranoy_set_profile
+  - paranoy_set_collection
+  - paranoy_set_mode
+  - paranoy_set_roles
+  - paranoy_whoami
+  - paranoy_schedule_job
 provides_hooks:
   - pre_llm_call
   - pre_tool_call
@@ -62,7 +67,8 @@ config_schema:
     description: >
       Pinned collection slug. Required for reader and contributor. Optional
       for ledger. For admin, must belong to the managed set when that set
-      is non-empty.
+      is non-empty. Set with /paranoy collection, or by the agent with
+      paranoy_set_collection after a person approves.
   collections:
     type: str
     default: ""
@@ -110,14 +116,17 @@ config_schema:
     type: bool
     default: true
     label: Require publish approval
-    description: Ask a person before content or governance writes.
+    description: >
+      Ask a person before content or governance writes, and before the agent
+      changes the collection, mode, or roles.
   allow_unattended_writes:
     type: bool
     default: false
     label: Allow unattended writes
     description: >
-      Allow writes during cron when nobody can answer. Also turn off require
-      publish approval for those runs. Default refuses them.
+      Allow writes and agent setting changes during cron when nobody can
+      answer. Also turn off require publish approval for those runs. Default
+      refuses them.
   auto_sign_terms:
     type: bool
     default: true

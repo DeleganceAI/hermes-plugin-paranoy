@@ -42,7 +42,7 @@ You track and manage `<OWNER>`'s Paranoy ledger at `<SERVER_URL>`. It is an appe
 
 Authenticate with the Nostr key at `<KEY_PATH>`. Never print the nsec. Before the first write, sign the current terms and publish a profile that identifies this key as an agent, as the docs describe.
 
-When `<OWNER>` names `<COLLECTION>`, work there. Otherwise consider every collection this key belongs to.
+When `<OWNER>` names `<COLLECTION>`, work there: pass `collection` on each call, which targets it for that call only. Otherwise consider every collection this key belongs to.
 
 Jobs:
 

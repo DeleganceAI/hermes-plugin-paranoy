@@ -26,18 +26,25 @@ def settings(**extra):
 
 
 class PinTests(unittest.TestCase):
-    def test_reader_and_contributor_are_pinned(self):
+    def test_reader_and_contributor_default_to_the_pin(self):
         for mode in ("reader", "contributor"):
             resolved = gates.resolve_collection(
                 settings(mode=mode), "paranoy_search_claims", {}
             )
             self.assertEqual(resolved, "pump")
+            # A per-call collection targets that collection; the pin is untouched.
+            pinned = settings(mode=mode)
+            self.assertEqual(
+                gates.resolve_collection(pinned, "paranoy_search_claims", {"collection": "other"}),
+                "other",
+            )
+            self.assertEqual(pinned["collection"], "pump")
             with self.assertRaises(plugin.client.PluginError):
                 gates.resolve_collection(
-                    settings(mode=mode),
-                    "paranoy_search_claims",
-                    {"collection": "other"},
+                    settings(mode=mode, collection=""), "paranoy_search_claims", {}
                 )
+            with self.assertRaises(plugin.client.PluginError):
+                gates.resolve_collection(pinned, "paranoy_search_claims", {"collection": "Bad Slug"})
 
     def test_list_collections_is_not_pinned(self):
         self.assertIsNone(
@@ -64,8 +71,10 @@ class PinTests(unittest.TestCase):
     def test_ledger_uses_a_named_collection_or_any_argument(self):
         named = settings(mode="ledger", collection="pump")
         self.assertEqual(gates.resolve_collection(named, "paranoy_search_claims", {}), "pump")
-        with self.assertRaises(plugin.client.PluginError):
-            gates.resolve_collection(named, "paranoy_search_claims", {"collection": "other"})
+        self.assertEqual(
+            gates.resolve_collection(named, "paranoy_search_claims", {"collection": "other"}),
+            "other",
+        )
         open_ledger = settings(mode="ledger", collection="")
         self.assertEqual(
             gates.resolve_collection(open_ledger, "paranoy_search_claims", {"collection": "other"}),
@@ -92,7 +101,8 @@ class RoleTests(unittest.TestCase):
         self.assertTrue(gates.tool_visible(reader, "paranoy_search_claims"))
         self.assertFalse(gates.tool_visible(reader, "paranoy_add_claim"))
         self.assertFalse(gates.tool_visible(reader, "paranoy_set_admins"))
-        self.assertFalse(gates.tool_visible(settings(mode="reader", collection=""), "paranoy_search_claims"))
+        # Without a pin, reads stay visible and take a per-call collection.
+        self.assertTrue(gates.tool_visible(settings(mode="reader", collection=""), "paranoy_search_claims"))
         self.assertTrue(gates.tool_visible(settings(mode="reader", collection=""), "paranoy_list_collections"))
 
         miner = settings(mode="contributor", active_role="Claim Miner", roles_list=["Claim Miner"])
@@ -220,7 +230,7 @@ class RegisterTests(unittest.TestCase):
         plugin.register(ctx)
         self.assertEqual(ctx.tools, list(schemas.ALL_TOOL_NAMES))
         self.assertEqual([name for name, _ in ctx.hooks], list(schemas.HOOKS))
-        self.assertEqual(ctx.skills, ["reader", "contributor", "admin", "ledger", "setup"])
+        self.assertEqual(ctx.skills, ["reader", "contributor", "admin", "ledger", "setup", "cadence"])
         self.assertIn("paranoy", ctx.commands)
         who = ctx.slash("whoami")
         self.assertNotIn("nsec1", who)

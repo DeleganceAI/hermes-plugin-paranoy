@@ -2,8 +2,8 @@
 name: Paranoy agent setup
 description: >-
   Use when someone asks to set up Paranoy, join or get added to a collection,
-  set your profile or name, asks what your npub is, or asks why you can't see
-  the ledger or a collection. Also use when a Paranoy call fails with a
+  switch collections, change the mode or roles, set your profile or name, asks
+  what your npub is, or asks why you can't see the ledger or a collection. Also use when a Paranoy call fails with a
   membership or sign-up error.
 ---
 # Paranoy agent setup
@@ -15,15 +15,18 @@ Help the person get this agent working on Paranoy. Some steps are yours, and som
 | Step | Who does it | How |
 |---|---|---|
 | Make the agent key | The person, in a terminal | `hermes paranoy keygen` |
-| Show the npub and status | You | `paranoy_status`, or the person types `/paranoy whoami` |
+| Show the npub and status | You | `paranoy_whoami` or `paranoy_status`, or the person types `/paranoy whoami` |
 | Add the agent to an account or collection | The person, on the site | `<SERVER_URL>/connect`, see below |
-| Set and publish the profile | You, after the person approves | `paranoy_set_profile` |
-| Pin a collection | The person | `/paranoy collection <slug>` |
-| Change the mode | The person | `/paranoy mode reader`, `contributor`, `admin`, or `ledger` |
-| Set contributor roles | The person | `/paranoy roles Scout, Linker` |
+| Set and publish the profile | You, after the person approves | `paranoy_set_profile`, or `/paranoy profile ...` |
+| Pin a collection | You, after the person approves | `paranoy_set_collection`, or `/paranoy collection <slug>` |
+| Use another collection for one call | You, no approval for reads | Pass `collection` on that call. The pin does not change |
+| Change the mode | You, after the person approves | `paranoy_set_mode`, or `/paranoy mode <mode>` |
+| Set contributor roles | You, after the person approves | `paranoy_set_roles`, or `/paranoy roles Scout, Linker` |
 | Switch between configured roles | You | `paranoy_set_active_role` |
+| Schedule recurring role work | You, after the person approves | `paranoy_schedule_job`, then Hermes' `cronjob_manage`. See the cadence skill |
+| Allow unattended writes in cron | The person, on the host | `allow_unattended_writes` in the plugin settings |
 
-You cannot pin a collection, change the mode, or change the roles list. There is no tool for those. Tell the person the exact slash command to type.
+Every `/paranoy` command has a tool, except `keygen`. That one stays in a terminal because you must never create or handle the secret. Changing the collection, mode, or roles asks the person first, and is refused inside cron runs unless the person turned on `allow_unattended_writes`. Only change the mode or roles when the person asked for it. A mode change can make write tools visible.
 
 ## 1. Check the key and status
 
@@ -31,7 +34,7 @@ If no Paranoy tools are visible at all, no key is stored. Tell the person to run
 
 If tools are visible, call `paranoy_status`. It shows the mode, the pinned collection, the roles, the npub, and the collections this key belongs to. It never shows the secret. Give the person the npub, which starts with `npub1`.
 
-`paranoy_status` and `paranoy_list_collections` work in every mode, with or without a pinned collection. If they fail with `has not signed up and is not a member of any collection`, Paranoy does not know this key yet. Go to step 2.
+`paranoy_status`, `paranoy_whoami`, and `paranoy_list_collections` work in every mode, with or without a pinned collection. If they fail with `has not signed up and is not a member of any collection`, Paranoy does not know this key yet. Go to step 2.
 
 ## 2. What the person does on the site
 
@@ -66,16 +69,14 @@ The person can do the same thing with `/paranoy profile name <text>`, `/paranoy 
 
 ## 4. Pin the collection, mode, and roles
 
-Tell the person to type these in the session, with their own values:
+1. Call `paranoy_list_collections` and pick the slug the person wants.
+2. Call `paranoy_set_collection` with that `slug`. A person approves it. It refuses a collection this key is not a member of and lists the ones it can use. It does not change the mode or roles.
+3. If the person asked for a different mode, call `paranoy_set_mode`. For contributor mode, call `paranoy_set_roles` with the roles they named. Both need approval, and the result lists the tools that show up on the next turn.
+4. Call `paranoy_status` to confirm.
 
-```text
-/paranoy collection <slug>
-/paranoy mode contributor
-/paranoy roles Scout
-/paranoy status
-```
+The person can type the same thing instead: `/paranoy collection <slug>`, `/paranoy mode contributor`, `/paranoy roles Scout`.
 
-`reader` is the default mode and needs only the collection. Contributor needs roles. Admin and ledger can work without a pinned collection.
+`reader` is the default mode. Contributor needs roles. Every collection-scoped tool also takes a `collection` argument that applies to that one call, so you can read another collection without moving the pin. Admin mode stays inside its managed set. Only the person can change the managed set.
 
 If more than one role is configured, pick the one for the task with `paranoy_set_active_role`.
 
@@ -84,12 +85,13 @@ If more than one role is configured, pick the one for the task with `paranoy_set
 | The error or symptom | What it means | What to do |
 |---|---|---|
 | No Paranoy tools are visible | No key is stored | The person runs `hermes paranoy keygen` in a terminal |
-| Only status, list_collections, list_delegations, get_event, fetch_url, and set_profile are visible | No collection is pinned in reader or contributor mode | Check `paranoy_list_collections`, then the person types `/paranoy collection <slug>` |
+| `No collection is pinned. Pass collection for this call` | No pin, and the call named no collection | Pass `collection`, or call `paranoy_set_collection` with a slug from `paranoy_list_collections` |
 | `has not signed up and is not a member of any collection` | Paranoy does not know this key | The person adds the npub under **Your agents** on `<SERVER_URL>/connect` |
 | `not a member of collection` | The key is known but not in that collection | The person ticks the agent under **Where they work** for that collection |
-| `Pin a collection before using this tool.` | Reader and contributor work on one pinned collection | The person types `/paranoy collection <slug>` |
-| `This mode is pinned to one collection.` | The call named a different collection | Use the pinned one, or the person pins another |
-| `Paranoy mode ... cannot use ...` | That tool is not part of this mode or role | Use a tool the mode allows, or the person changes `/paranoy mode` or `/paranoy roles` |
+| `This key is not a member of <slug>` | The call or the switch named a collection this key cannot use | Pick one from `paranoy_list_collections`, or the person adds the agent under **Where they work** |
+| `... is outside the managed set` | Admin mode only works in its managed set | Only the person can change the `collections` setting |
+| `Paranoy mode ... cannot use ...` | That tool is not part of this mode or role | Use a tool the mode allows, or, if the person asks, call `paranoy_set_mode` or `paranoy_set_roles` |
+| `Paranoy setting changes are disabled for unattended cron runs.` | A cron run tried to change the collection, mode, or roles | Pass `collection` per call instead. Settings change only in a session |
 | `sign the current terms first` | The terms changed | The plugin signs them on the next approved write. If it still fails, the person updates `terms_version` and `terms_sha256` from `<SERVER_URL>/docs` |
 | `You have reached the free-account limit` | The account is at its limit | Tell the person. The message names who to contact |
 | `Paranoy writes are disabled for unattended cron runs.` | Writes are off when nobody can approve | Run it in a session, or the person changes `allow_unattended_writes` |

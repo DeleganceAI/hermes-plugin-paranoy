@@ -3,7 +3,8 @@
 ``check_fn`` hides tools the active mode and role must not see. ``pre_tool_call``
 is the second fence: it blocks the same cases, blocks key material, and
 escalates ledger writes to a person. Roster, admin-list, and agent-list
-writes always ask for approval.
+writes always ask for approval. Collection, mode, and roles changes from the
+agent ask the same way, though they publish nothing.
 
 Kind 4705, 4710, 4713, and 4714 replace the whole list. The handlers fetch,
 merge, and preview. Kind 4711 steward grants are not signed. No tool changes
@@ -110,15 +111,16 @@ def tool_visible(settings: dict, tool_name: str) -> bool:
     """False hides the tool from the model."""
     mode = settings.get("mode") or "reader"
     has_key = bool(settings.get("key_configured"))
-    if tool_name in schemas.PROFILE_TOOLS:
+    if (
+        tool_name in schemas.PROFILE_TOOLS
+        or tool_name in schemas.CONFIG_TOOLS
+        or tool_name in schemas.JOB_TOOLS
+    ):
         # Any mode, with or without a pinned collection. Only a key is needed.
         return has_key
     if tool_name in schemas.READ_TOOLS:
-        if not has_key:
-            return False
-        if tool_name not in schemas.COLLECTION_FREE and mode in {"reader", "contributor"}:
-            return bool(settings.get("collection"))
-        return True
+        # Collection-scoped reads take a per-call collection, so no pin is needed.
+        return has_key
     if tool_name in schemas.LOCAL_TOOLS:
         return mode == "contributor"
     if tool_name in schemas.CONTENT_TOOLS:
@@ -126,7 +128,7 @@ def tool_visible(settings: dict, tool_name: str) -> bool:
             return False
         if mode == "ledger":
             return True
-        if mode != "contributor" or not settings.get("collection"):
+        if mode != "contributor":
             return False
         allowed = schemas.ROLE_CONTENT.get(settings.get("active_role") or "", set())
         return tool_name in allowed
@@ -140,27 +142,31 @@ def tool_visible(settings: dict, tool_name: str) -> bool:
 
 
 def resolve_collection(settings: dict, tool_name: str, args: dict) -> str | None:
-    """Default and reject collection arguments. list_collections is not pinned."""
+    """Pick the collection for one call. list_collections is not pinned.
+
+    A ``collection`` argument targets that collection for this call only. The
+    pinned setting does not change. The handlers check membership in the
+    target before they read or write.
+    """
     if tool_name in schemas.COLLECTION_FREE:
         asked = str((args or {}).get("collection") or "").strip()
         return asked or None
     asked = str((args or {}).get("collection") or "").strip()
     pinned = str(settings.get("collection") or "").strip()
     mode = settings.get("mode")
-    if mode in {"reader", "contributor"}:
-        if not pinned:
-            raise PluginError("Pin a collection before using this tool.")
-        if asked and asked != pinned:
-            raise PluginError("This mode is pinned to one collection.")
-        return pinned
-    if mode == "ledger":
-        if pinned:
-            if asked and asked != pinned:
-                raise PluginError("Ledger mode is using the named collection.")
-            return pinned
-        if not asked:
-            raise PluginError("Name a collection, or pin one in settings.")
-        return asked
+    if asked and not _SLUG.fullmatch(asked):
+        raise PluginError(
+            "Collection slugs start with a lowercase letter or digit and "
+            "then use lowercase letters, digits, hyphens, or underscores."
+        )
+    if mode in {"reader", "contributor", "ledger"}:
+        chosen = asked or pinned
+        if not chosen:
+            raise PluginError(
+                "No collection is pinned. Pass collection for this call, or pin one with "
+                "paranoy_set_collection."
+            )
+        return chosen
     if mode == "admin":
         chosen = asked or pinned
         if not chosen:
@@ -170,6 +176,14 @@ def resolve_collection(settings: dict, tool_name: str, args: dict) -> str | None
             raise PluginError("That collection is outside the managed set.")
         return chosen
     raise PluginError("The Paranoy mode is not recognized.")
+
+
+def is_override(settings: dict, tool_name: str, args: dict) -> bool:
+    """True when the call targets a collection other than the pinned one."""
+    if tool_name in schemas.COLLECTION_FREE:
+        return False
+    asked = str((args or {}).get("collection") or "").strip()
+    return bool(asked) and asked != str(settings.get("collection") or "").strip()
 
 
 def _looks_sensitive(value) -> bool:
@@ -211,7 +225,66 @@ def bare_tool_name(tool_name: str) -> str:
     return name
 
 
+def _config_arg_block(settings: dict, tool_name: str, args: dict) -> str | None:
+    """Local checks for config tools, so a bad value is refused before approval."""
+    from .commands import check_managed, check_mode, check_roles, check_slug
+
+    try:
+        if tool_name == "paranoy_set_collection":
+            check_managed(settings, check_slug(args.get("slug")))
+        elif tool_name == "paranoy_set_mode":
+            check_mode(args.get("mode"))
+        elif tool_name == "paranoy_set_roles":
+            check_roles(args.get("roles"))
+    except PluginError as exc:
+        return str(exc)
+    return None
+
+
+def _job_action(args: dict) -> str:
+    return str((args or {}).get("action") or "").strip().lower()
+
+
+def _job_arg_block(args: dict) -> str | None:
+    from . import jobs
+
+    action = _job_action(args)
+    try:
+        if action == "create":
+            jobs.validate(args)
+        elif action == "remove":
+            jobs.check_name(args.get("name"))
+        elif action != "list":
+            return "action must be create, list, or remove."
+    except PluginError as exc:
+        return str(exc)
+    return None
+
+
+def _config_message(settings: dict, tool_name: str, args: dict) -> str:
+    if tool_name == "paranoy_set_collection":
+        old = settings.get("collection") or "(unset)"
+        return (
+            f"Approve switching the Paranoy collection from {old} to {args.get('slug')}. "
+            "Mode and roles stay the same, and nothing is published."
+        )
+    if tool_name == "paranoy_set_mode":
+        return (
+            f"Approve changing the Paranoy mode from {settings.get('mode')} to "
+            f"{str(args.get('mode') or '').strip().lower()}. This changes which tools the agent "
+            "can use, including writes. Nothing is published."
+        )
+    return (
+        "Approve changing the Paranoy contributor roles. This changes which write tools the "
+        "agent can use. Nothing is published."
+    )
+
+
 def _arg_block(settings: dict, tool_name: str, args: dict) -> str | None:
+    if tool_name in schemas.CONFIG_APPROVAL:
+        return _config_arg_block(settings, tool_name, args)
+    if tool_name in schemas.JOB_TOOLS:
+        return _job_arg_block(args)
     if settings.get("mode") == "ledger" and tool_name in schemas.EXPLICIT_OWNER_TOOLS:
         if not as_bool(args.get("owner_asked"), False):
             return (
@@ -253,17 +326,49 @@ def pre_tool_directive(ctx, tool_name, args) -> dict | None:
             "action": "approve",
             "message": "This replaces a whole list. Approve the add and remove before it is published.",
         }
+    if name in schemas.JOB_TOOLS:
+        from .jobs import APPROVAL_ACTIONS
+
+        if _job_action(payload) not in APPROVAL_ACTIONS:
+            return None
+        if in_unattended_cron(ctx):
+            return {
+                "action": "block",
+                "message": "Paranoy jobs are not created or removed from inside a cron run.",
+            }
+        if settings["require_publish_approval"]:
+            return {
+                "action": "approve",
+                "message": f"Approve this Paranoy job {_job_action(payload)}: "
+                f"{payload.get('name') or (str(payload.get('role') or '') + ' in ' + str(payload.get('collection') or ''))}. "
+                "It builds a recurring Hermes job. Nothing is published now.",
+            }
+        return None
+    if name in schemas.CONFIG_APPROVAL:
+        return _approval(
+            ctx,
+            settings,
+            "Paranoy setting changes are disabled for unattended cron runs.",
+            _config_message(settings, name, payload),
+        )
     if name not in schemas.APPROVAL_WRITES:
         return None
-    if in_unattended_cron(ctx) and not settings["allow_unattended_writes"]:
-        return {"action": "block", "message": "Paranoy writes are disabled for unattended cron runs."}
-    if in_unattended_cron(ctx) and settings["allow_unattended_writes"]:
+    return _approval(
+        ctx,
+        settings,
+        "Paranoy writes are disabled for unattended cron runs.",
+        "Paranoy write needs a person's approval before it can run.",
+    )
+
+
+def _approval(ctx, settings: dict, cron_message: str, approve_message: str) -> dict | None:
+    """Shared by writes and setting changes: cron refusal, then person approval."""
+    if in_unattended_cron(ctx):
+        if not settings["allow_unattended_writes"]:
+            return {"action": "block", "message": cron_message}
         return None
     if settings["require_publish_approval"]:
-        return {
-            "action": "approve",
-            "message": "Paranoy write needs a person's approval before it can run.",
-        }
+        return {"action": "approve", "message": approve_message}
     return None
 
 
@@ -324,11 +429,17 @@ def setup_hints(settings: dict, npub: str | None, saved: dict | None = None) -> 
             f"Setup: no collection is pinned. Agent npub: {npub}. Call paranoy_list_collections. "
             f"If it is empty, the owner adds this npub on {server}/connect under Your agents, "
             "then ticks it under Where they work, or a collection owner adds the owner first. "
-            "Then the user types `/paranoy collection <slug>`, and `/paranoy mode <mode>` if "
-            "the mode should change. You cannot pin a collection or change the mode yourself."
+            "Then pin one: you may call paranoy_set_collection with a slug from "
+            "paranoy_list_collections, and a person approves it, or the user types "
+            "`/paranoy collection <slug>`. If the mode should change, call paranoy_set_mode "
+            "the same way, with approval. Mode and roles change only with the user's approval. "
+            "Collection-scoped tools also take a collection argument for one call without a pin."
         )
     if mode == "contributor" and not settings.get("roles_list"):
-        lines.append("Setup: contributor mode has no roles. The user types `/paranoy roles <roles>`.")
+        lines.append(
+            "Setup: contributor mode has no roles. Call paranoy_set_roles with the roles the "
+            "user asked for, and a person approves it, or the user types `/paranoy roles <roles>`."
+        )
     elif mode == "contributor" and not settings.get("active_role"):
         lines.append("Setup: more than one role is set. Pick one with paranoy_set_active_role.")
     if not saved.get("profile_published_at") and not saved.get("terms_published"):
@@ -360,7 +471,9 @@ def prompt_context(settings: dict) -> str:
     if not hints:
         hints = [
             "Setup looks complete. For a not-a-member error, or a setup or profile question, "
-            "use the setup skill. paranoy_set_profile works in any mode."
+            "use the setup skill. paranoy_set_profile works in any mode. To work in another "
+            "collection, call paranoy_set_collection with a slug from paranoy_list_collections; "
+            "a person approves it. Mode and roles change only with the user's approval."
         ]
     return "\n".join(
         [
@@ -431,10 +544,17 @@ def profile_text(settings: dict) -> str:
 
 
 PROFILE_USAGE = "Usage: /paranoy profile [name <text>|about <text>|publish]"
-USAGE = "Usage: /paranoy status|collection|mode|roles|whoami|profile"
+USAGE = "Usage: /paranoy status|collection|mode|roles|whoami|profile|job"
+JOB_USAGE = (
+    "Usage: /paranoy job create --role <role> --collection <slug> --target <n> "
+    '--cadence <hourly|"every 2h"|"0 * * * *"> [--focus "<text>"] [--name <name>]\n'
+    "       /paranoy job list\n"
+    "       /paranoy job remove <name>"
+)
 
 
 def _profile_command(ctx, settings: dict, parts: list[str], service_factory) -> str:
+    from .commands import save_profile
     from .runtime import profile_content, publish_profile
 
     sub = parts[1].lower() if len(parts) > 1 else ""
@@ -445,10 +565,10 @@ def _profile_command(ctx, settings: dict, parts: list[str], service_factory) -> 
         if not value:
             return f"{sub}: {profile_content(settings)[sub]}"
         try:
-            cleaned = profile_value(sub, value)
+            merged = save_profile(settings, {sub: value}, ctx.set_config)
         except PluginError as exc:
             return str(exc)
-        ctx.set_config("agent_name" if sub == "name" else "agent_about", cleaned)
+        cleaned = profile_content(merged)[sub]
         return f"{sub}: {cleaned}\nSaved. Run /paranoy profile publish to send it."
     if sub == "publish":
         if value:
@@ -478,11 +598,194 @@ def _profile_command(ctx, settings: dict, parts: list[str], service_factory) -> 
     return PROFILE_USAGE
 
 
+def _listing(settings: dict, service_factory):
+    """list_collections rows and the pubkey, or (None, None) when unavailable."""
+    from .commands import membership_rows
+
+    if not settings.get("key_configured") or service_factory is None:
+        return None, None
+    try:
+        service = service_factory(settings)
+        return membership_rows(service.call("list_collections", {})), service.pubkey
+    except Exception:
+        return None, None
+
+
+def _slash_status(ctx, settings, argument, parts, service_factory):
+    if argument:
+        return USAGE
+    return status_text(settings)
+
+
+def _slash_collection(ctx, settings, argument, parts, service_factory):
+    from . import commands
+
+    if not argument:
+        return f"collection: {settings['collection'] or '(unset)'}"
+    try:
+        commands.check_slug(argument)
+        commands.check_managed(settings, argument)
+    except PluginError as exc:
+        return str(exc)
+    rows, pubkey = _listing(settings, service_factory)
+    try:
+        result = commands.set_collection(settings, argument, ctx.set_config, rows, pubkey, strict=False)
+    except PluginError as exc:
+        return str(exc)
+    lines = [f"collection: {result['collection']}"]
+    if result.get("warning"):
+        lines.append(result["warning"])
+    return "\n".join(lines)
+
+
+def _slash_mode(ctx, settings, argument, parts, service_factory):
+    from . import commands
+
+    if not argument:
+        return f"mode: {settings['mode']}"
+    try:
+        result = commands.set_mode(settings, argument, ctx.set_config)
+    except PluginError as exc:
+        return str(exc)
+    return "\n".join([f"mode: {result['mode']}", *commands.describe_visibility(result)])
+
+
+def _slash_roles(ctx, settings, argument, parts, service_factory):
+    from . import commands
+
+    if not argument:
+        return f"roles: {settings['roles'] or '(unset)'}"
+    try:
+        result = commands.set_roles(settings, argument, ctx.set_config)
+    except PluginError as exc:
+        return str(exc)
+    return "\n".join([f"roles: {', '.join(result['roles'])}", *commands.describe_visibility(result)])
+
+
+def _slash_whoami(ctx, settings, argument, parts, service_factory):
+    from .commands import whoami
+
+    npub = whoami(settings, _npub())["npub"]
+    if not npub:
+        return "No agent key is stored in Hermes yet. This command does not print a secret."
+    return f"npub: {npub}"
+
+
+def _slash_profile(ctx, settings, argument, parts, service_factory):
+    return _profile_command(ctx, settings, parts, service_factory)
+
+
+def _job_flags(tokens: list[str]) -> dict:
+    allowed = {"role", "collection", "target", "cadence", "focus", "name"}
+    args: dict = {}
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not token.startswith("--") or token[2:] not in allowed or index + 1 >= len(tokens):
+            raise PluginError(JOB_USAGE)
+        args[token[2:]] = tokens[index + 1]
+        index += 2
+    return args
+
+
+def _dispatch_cron(ctx, arguments: dict):
+    """Create the Hermes job through ctx.dispatch_tool when this Hermes has it."""
+    dispatch = getattr(ctx, "dispatch_tool", None)
+    if not callable(dispatch):
+        return None
+    try:
+        raw = dispatch("cronjob_manage", arguments)
+    except Exception:
+        return None
+    if isinstance(raw, str):
+        import json
+
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _slash_job(ctx, settings, argument, parts, service_factory):
+    import shlex
+
+    from . import jobs
+
+    try:
+        tokens = shlex.split(argument)
+    except ValueError:
+        return JOB_USAGE
+    sub = tokens[0].lower() if tokens else ""
+    try:
+        if sub == "list" and len(tokens) == 1:
+            listed = jobs.list_jobs()["jobs"]
+            if not listed:
+                return "No Paranoy jobs. Hermes' own list: /cron list"
+            return "\n".join(
+                f"{job['name']}: {job['role']} in {job['collection']}, {job['target']} per run, "
+                f"{job['cadence']}" + (f", job id {job['hermes_job_id']}" if job.get("hermes_job_id") else "")
+                for job in listed
+            )
+        if sub == "remove" and len(tokens) == 2:
+            removed = jobs.remove_job({"name": tokens[1]})
+            job_id = removed["removed"].get("hermes_job_id")
+            if job_id and _dispatch_cron(ctx, {"action": "remove", "job_id": job_id}) is not None:
+                return f"Removed {tokens[1]} and Hermes job {job_id}."
+            return f"Removed {tokens[1]} from the plugin list. " + removed["next_step"]
+        if sub == "create":
+            args = _job_flags(tokens[1:])
+            jobs.validate(args)
+            rows, pubkey = _listing(settings, service_factory)
+            result = jobs.create_job(settings, args, rows, pubkey, strict=False)
+        else:
+            return JOB_USAGE
+    except PluginError as exc:
+        return str(exc)
+    spec = result["job"]
+    lines = [f"Built {spec['name']}: {spec['role']} in {spec['collection']}, {spec['target']} per run, {spec['cadence']}."]
+    created = _dispatch_cron(ctx, result["cronjob_manage"])
+    job_id = (created or {}).get("job_id") if (created or {}).get("success") else None
+    if job_id:
+        jobs.record_hermes_id(spec["name"], job_id)
+        lines.append(f"Scheduled in Hermes as job {job_id}.")
+    else:
+        lines.append("Schedule it in Hermes with this terminal command:")
+        lines.append(result["cli_command"])
+    if result.get("volume"):
+        volume = result["volume"]
+        lines.append(f"Up to {volume['max_items_per_day']} items a day. {volume['note']}")
+    for note in [result.get("warning"), *result["prerequisites"]]:
+        if note:
+            lines.append("Before it can work: " + note)
+    return "\n".join(lines)
+
+
+def _slash_keygen(ctx, settings, argument, parts, service_factory):
+    return "Keygen is a terminal command: hermes paranoy keygen"
+
+
+# Every /paranoy subcommand. schemas.SLASH_TOOLS maps each one, except the
+# terminal-only keygen, to the agent tool that does the same thing.
+SLASH_COMMANDS = {
+    "status": _slash_status,
+    "collection": _slash_collection,
+    "mode": _slash_mode,
+    "roles": _slash_roles,
+    "whoami": _slash_whoami,
+    "profile": _slash_profile,
+    "job": _slash_job,
+    "keygen": _slash_keygen,
+}
+PROFILE_SUBCOMMANDS = ("", "name", "about", "publish")
+JOB_SUBCOMMANDS = ("", "create", "list", "remove")
+
+
 def slash_result(ctx, raw_args: str, service_factory=None) -> str:
     """``/paranoy`` subcommands. Secret-looking arguments are not saved or echoed.
 
-    ``service_factory`` is only used by ``profile publish``. Typing that
-    command is the person's approval for the kind 0.
+    ``service_factory`` is used by ``profile publish`` and to check membership
+    for ``collection``. Typing a command is the person's approval for it.
     """
     settings = read_settings(ctx)
     parts = (raw_args or "").split()
@@ -490,46 +793,7 @@ def slash_result(ctx, raw_args: str, service_factory=None) -> str:
     argument = " ".join(parts[1:]).strip()
     if argument and _reject_secret_text(argument):
         return "That value was not saved."
-    if command == "profile":
-        return _profile_command(ctx, settings, parts, service_factory)
-    if command == "status" and not argument:
-        return status_text(settings)
-    if command == "collection":
-        if not argument:
-            return f"collection: {settings['collection'] or '(unset)'}"
-        if not _SLUG.fullmatch(argument):
-            return (
-                "Collection slugs start with a lowercase letter or digit and "
-                "then use lowercase letters, digits, hyphens, or underscores."
-            )
-        ctx.set_config("collection", argument)
-        return f"collection: {argument}"
-    if command == "mode":
-        if not argument:
-            return f"mode: {settings['mode']}"
-        mode = argument.lower()
-        if mode not in schemas.MODES:
-            return "Mode must be reader, contributor, admin, or ledger."
-        ctx.set_config("mode", mode)
-        return f"mode: {mode}"
-    if command == "roles":
-        if not argument:
-            return f"roles: {settings['roles'] or '(unset)'}"
-        names = canonical_roles(argument)
-        unknown = [
-            part
-            for part in parse_csv(argument)
-            if schemas.ROLE_INDEX.get(part.casefold()) is None
-        ]
-        if unknown or not names:
-            return "Roles must be chosen from Scout, Claim Miner, Linker, Gap Finder, Fool, Ponder, and Ledger."
-        ctx.set_config("roles", ", ".join(names))
-        return f"roles: {', '.join(names)}"
-    if command == "whoami":
-        npub = _npub()
-        if not npub:
-            return "No agent key is stored in Hermes yet. This command does not print a secret."
-        return f"npub: {npub}"
-    if command == "keygen":
-        return "Keygen is a terminal command: hermes paranoy keygen"
-    return USAGE
+    handler = SLASH_COMMANDS.get(command)
+    if handler is None:
+        return USAGE
+    return handler(ctx, settings, argument, parts, service_factory)

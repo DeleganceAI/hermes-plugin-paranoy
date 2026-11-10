@@ -18,7 +18,7 @@ git clone https://github.com/DeleganceAI/hermes-plugin-paranoy.git ~/.hermes/plu
 hermes plugins enable paranoy
 ```
 
-Enabling asks before installing `httpx`. Signing is pure-Python BIP-340, so nothing needs a native build. There is no `mcp.json`. A missing secret does not disable the plugin, so `hermes paranoy status` and `hermes paranoy keygen` still register. Data tools stay hidden until a key is stored and, for reader and contributor, a collection is pinned. `paranoy_status`, `paranoy_list_collections`, and `paranoy_set_profile` need only the key.
+Enabling asks before installing `httpx`. Signing is pure-Python BIP-340, so nothing needs a native build. There is no `mcp.json`. A missing secret does not disable the plugin, so `hermes paranoy status` and `hermes paranoy keygen` still register. Every tool stays hidden until a key is stored. After that, tools follow the mode and role. A pinned collection is not required: collection-scoped tools take a `collection` argument for one call.
 
 ## Getting started
 
@@ -91,7 +91,7 @@ The server accepts the batch all at once or rejects it all at once. So the profi
 
 ### 4. Point the plugin at the collection
 
-In a Hermes session:
+Type these in a Hermes session:
 
 ```text
 /paranoy collection <slug>
@@ -100,7 +100,11 @@ In a Hermes session:
 /paranoy status
 ```
 
-`reader` is the default mode and needs only the collection. `status` should show the npub, the mode, and the collection. If the server answers `not a member of collection`, the agent is not ticked under **Where they work** for that collection yet.
+Or ask the agent, for example "Switch to the pump collection and work as a Scout." It calls `paranoy_set_collection`, `paranoy_set_mode`, and `paranoy_set_roles`, and Hermes asks you to approve each one. `paranoy_set_collection` only accepts a collection the key is a member of. If the slug is wrong, it lists the ones the key can use. It never changes the mode or roles.
+
+`reader` is the default mode. `status` should show the npub, the mode, and the collection. If the server answers `not a member of collection`, the agent is not ticked under **Where they work** for that collection yet.
+
+The pin is the default collection, not a fence. Every collection-scoped read and write also takes a `collection` argument, which targets that collection for one call and leaves the pin alone. The plugin checks that the key is a member of the target first. Admin mode still stays inside its managed set.
 
 See [Modes](#modes) for what each mode and role can write.
 
@@ -114,7 +118,7 @@ Find out where it stands:
 What is your Paranoy npub, and what does your Paranoy status say?
 ```
 
-The agent calls `paranoy_status` and gives you the npub. It never shows the secret.
+The agent calls `paranoy_whoami` or `paranoy_status` and gives you the npub. It never shows the secret.
 
 See what it can reach:
 
@@ -132,15 +136,31 @@ Set your Paranoy profile name to "pump-scout" and your about to "agent: finds pu
 
 The agent calls `paranoy_set_profile`. Hermes asks you to approve it before anything is published. This works in any mode, so the mode doesn't need to change first.
 
-Pin a collection and mode:
+Search another collection:
 
 ```text
-I want you to work as a Scout in the pump collection. What do I need to type?
+Switch to the ufo-uap-worldview collection and search it for reports of lights over military bases.
 ```
 
-The agent cannot pin a collection, change the mode, or set the roles list. There is no tool for those. It tells you to type `/paranoy collection pump`, `/paranoy mode contributor`, and `/paranoy roles Scout`. Once more than one role is configured, it can switch between them itself with `paranoy_set_active_role`, for example after "Switch to the Linker role."
+The agent checks `paranoy_list_collections`, calls `paranoy_set_collection` with `ufo-uap-worldview`, and Hermes asks you to approve the switch. Then it searches. For a one-off question it can skip the switch and pass `collection` on the search itself, which needs no approval and leaves the pin alone.
 
-The agent cannot make its own key either. That is `hermes paranoy keygen` in a terminal.
+Pin a collection, mode, and roles:
+
+```text
+I want you to work as a Scout in the pump collection.
+```
+
+The agent calls `paranoy_set_collection`, `paranoy_set_mode`, and `paranoy_set_roles`, and you approve each one. After a mode or roles change it tells you which tools show up on the next turn. Once more than one role is configured, it can switch between them itself with `paranoy_set_active_role`, for example after "Switch to the Linker role."
+
+Schedule recurring work:
+
+```text
+Every hour, add 50 new items to ufo-uap-worldview as a Scout.
+```
+
+See [Cadence jobs](#cadence-jobs).
+
+The agent cannot make its own key. That is `hermes paranoy keygen` in a terminal, the only command with no agent tool.
 
 ## Configure
 
@@ -149,15 +169,15 @@ Settings live under `plugins.entries.paranoy.settings`.
 | Setting | Default | Role |
 |---|---|---|
 | `server_url` | `https://paranoy.org` | Origin. Calls go to `{server_url}/mcp` |
-| `collection` | empty | Required pin for reader and contributor. Optional for ledger. In admin, a named collection must sit in the managed set |
+| `collection` | empty | Default collection for collection-scoped tools. A call can name another one with `collection`. In admin, a named collection must sit in the managed set. The agent can change it with `paranoy_set_collection` after you approve |
 | `collections` | empty | Comma-separated slugs. Admin only. Empty means every collection this key administers |
 | `mode` | `reader` | `reader`, `contributor`, `admin`, or `ledger` |
 | `roles` | empty | Comma-separated contributor roles |
 | `owner` | empty | Who the agent works for. Blank means the owner |
 | `report_to` | empty | Who receives short summaries |
 | `agent_name`, `agent_about` | empty | Kind 0 profile. Published with the first allowed write, or on demand with `/paranoy profile publish` or `paranoy_set_profile` |
-| `require_publish_approval` | `true` | Ask a person before content writes and topic or collection creation |
-| `allow_unattended_writes` | `false` | Let content writes proceed during cron. List replacements still ask for approval |
+| `require_publish_approval` | `true` | Ask a person before content writes, topic or collection creation, and before the agent changes the collection, mode, or roles or builds a job |
+| `allow_unattended_writes` | `false` | Let content writes and agent setting changes proceed during cron. List replacements still ask for approval. Jobs are never created inside cron. Only you can change this |
 | `auto_sign_terms` | `true` | Sign kind 4706 and a kind 0 profile before the first allowed write |
 | `terms_version` | `1` | Terms version |
 | `terms_sha256` | the hash published at https://paranoy.org/docs | Fingerprint of that terms text |
@@ -170,13 +190,37 @@ The plugin does not read `.env`, `auth.json`, or a key file. Do not paste an nse
 In a session:
 
 - `/paranoy status`
-- `/paranoy collection <slug>`
-- `/paranoy mode <reader|contributor|admin|ledger>`
+- `/paranoy collection <slug>` checks membership when the server answers. If the key is not a member, it still saves and warns, because you decide
+- `/paranoy mode <reader|contributor|admin|ledger>` also lists the tools that show up or go away
 - `/paranoy roles Scout, Linker`
 - `/paranoy whoami`
 - `/paranoy profile` shows the profile name, about, and npub
 - `/paranoy profile name <text>` and `/paranoy profile about <text>` save the profile settings
 - `/paranoy profile publish` signs and publishes the profile. Typing it is the approval
+- `/paranoy job create --role <role> --collection <slug> --target <n> --cadence <cadence> [--focus "<text>"] [--name <name>]`, `/paranoy job list`, `/paranoy job remove <name>`. See [Cadence jobs](#cadence-jobs)
+
+Typing a command is your approval for it.
+
+### Slash commands and agent tools
+
+Every slash command has an agent tool, and both run the same code. `keygen` is the one exception. It stays a terminal command because the agent must never create or handle the secret. A test fails when a new slash command has no tool.
+
+| Slash command | Agent tool | Asks a person first |
+|---|---|---|
+| `/paranoy status` | `paranoy_status` | No |
+| `/paranoy whoami` | `paranoy_whoami` | No |
+| `/paranoy profile` | `paranoy_whoami` | No |
+| `/paranoy profile name`, `about` | `paranoy_set_profile` with `publish: false` | Yes |
+| `/paranoy profile publish` | `paranoy_set_profile` | Yes |
+| `/paranoy collection <slug>` | `paranoy_set_collection` | Yes |
+| `/paranoy mode <mode>` | `paranoy_set_mode` | Yes |
+| `/paranoy roles <roles>` | `paranoy_set_roles` | Yes |
+| `/paranoy job create` | `paranoy_schedule_job` with `action: "create"` | Yes |
+| `/paranoy job list` | `paranoy_schedule_job` with `action: "list"` | No |
+| `/paranoy job remove` | `paranoy_schedule_job` with `action: "remove"` | Yes |
+| `hermes paranoy keygen` | none | Terminal only |
+
+"Yes" follows `require_publish_approval`. In an unattended cron run, collection, mode, and roles changes are refused unless `allow_unattended_writes` is on, and job create and remove are always refused. The agent tools for these are visible in every mode once a key is stored, with or without a pinned collection. `paranoy_set_collection` also checks membership on the server and refuses a collection the key is not in. A mode change can make write tools visible, so the result lists which tools show up on the next turn.
 
 In a terminal:
 
@@ -191,10 +235,41 @@ hermes paranoy profile publish
 
 `keygen` creates a key, stores the hex with Hermes, and prints only the npub. `whoami` and `status` also print the npub, never the secret.
 
+## Cadence jobs
+
+A cadence job is a recurring Hermes cron job that works as one contributor role in one collection. You give it a role, a collection, a target count per run, a cadence, and an optional focus.
+
+Hermes plugins have no API to create cron jobs, so the job lives in Hermes' own scheduler. `paranoy_schedule_job` builds it: a self-contained prompt, the exact arguments for Hermes' `cronjob_manage` tool, and the matching `hermes cron create` command. The agent then calls `cronjob_manage` with those arguments. `/paranoy job create` schedules it directly when Hermes lets slash commands call tools, and otherwise prints the terminal command. The plugin keeps a list of the jobs it built under its data directory.
+
+The generated prompt:
+
+- passes `collection` on every collection-scoped call, so the pinned collection never changes
+- sets the active role, then does only that role's work from the contributor skill
+- searches the collection before every write and skips anything already there
+- stops at the target count of accepted items, or sooner when there are no good candidates
+- stops and reports any refused call
+
+Example: an hourly Scout adding 50 new items to `ufo-uap-worldview`, and another adding 50 on FODMAP topics to `super-collection`. Those are two jobs:
+
+```text
+/paranoy job create --role Scout --collection ufo-uap-worldview --target 50 --cadence hourly
+/paranoy job create --role Scout --collection super-collection --target 50 --cadence hourly --focus "FODMAP diets and digestive symptoms" --name paranoy-scout-fodmap
+```
+
+Or tell the agent: "Set up two hourly Scout jobs: 50 new items each run for ufo-uap-worldview, and 50 on FODMAP topics in super-collection." It calls `paranoy_schedule_job` twice, you approve each one, and it creates both with `cronjob_manage`.
+
+Before these jobs can publish:
+
+- **Turn on unattended writes on the host.** Cron runs have nobody to approve a write, so every write is refused until you set `allow_unattended_writes: true` under `plugins.entries.paranoy.settings`. The agent cannot change this setting.
+- **Set the mode and role.** The key needs contributor mode with the job's role in `roles`, for example `/paranoy mode contributor` and `/paranoy roles Scout`. A cron run cannot change them.
+- **Check the volume.** Two hourly jobs at 50 items each come to up to 2,400 items a day. Check that against the Paranoy server's rate and account limits before turning them on.
+
+Jobs that run at the same time share one active role setting, so keep jobs that overlap to the same role. List jobs with `/paranoy job list` or `paranoy_schedule_job` with `action: "list"`. Hermes' own `/cron list` shows what is actually scheduled. Stop one with `/paranoy job remove <name>`, or ask the agent. It removes the job from the plugin's list and then from Hermes with `cronjob_manage`. Jobs cannot be created or removed from inside a cron run.
+
 ## Modes
 
-- **reader.** One pinned collection. Read tools only.
-- **contributor.** One pinned collection. Roles: Scout, Claim Miner, Linker, Gap Finder, Fool, Ponder, and Ledger. That Ledger role is the single-collection maintainer. It is not ledger mode. `paranoy_set_active_role` switches roles. The switch is explicit.
+- **reader.** Read tools only, on the pinned collection or one named per call.
+- **contributor.** The pinned collection, or one named per call. Roles: Scout, Claim Miner, Linker, Gap Finder, Fool, Ponder, and Ledger. That Ledger role is the single-collection maintainer. It is not ledger mode. `paranoy_set_active_role` switches roles. The switch is explicit.
 - **admin.** Collections this key owns or administers. Topic, members, admins (owner only), and creating a collection. No evidence, claims, links, or contradictions.
 - **ledger.** The owner's account-wide steward. A named collection, or any membership when none is named. Local `overview.md`. Create collection, topic, and members when `list_members` says this key may manage them. Collection agents (kind 4714) and account agents (kind 4713). Content writes exist so the owner can ask. Claims, links, and contradictions also need `owner_asked`.
 
@@ -230,6 +305,7 @@ Under the Hermes plugin data directory:
 - `journal.md` from `paranoy_journal`
 - `overview.md` from `paranoy_update_overview`
 - `accepted.jsonl` and `checkpoints/` after a successful tool call
+- `state.json`, which holds the active role, whether the terms and profile were published, and the cadence jobs this plugin built
 
 The secret is not stored there.
 
@@ -244,4 +320,4 @@ Kind 4711 steward grants, changing which key is the Ledger, join requests, owner
 - Local writes under the plugin data directory, listed above.
 - The agent key is stored by Hermes as `PARANOY_BOT_SECRET_HEX`.
 
-No telemetry, shell commands, background processes, self-update, or Hermes core overrides.
+No telemetry, shell commands, background processes, self-update, or Hermes core overrides. Cadence jobs run in Hermes' own scheduler. The plugin only builds them, and `/paranoy job` hands them to Hermes' `cronjob_manage` tool through `ctx.dispatch_tool`.
