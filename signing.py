@@ -11,6 +11,8 @@ import json
 import secrets
 import time
 
+from . import schnorr
+
 _CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 _GENERATORS = [0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3]
 
@@ -135,12 +137,10 @@ class Signer:
     """Holds a key only to sign. ``repr`` does not include it."""
 
     def __init__(self, secret_hex: str, *, clock=None, aux_rand=None):
-        from coincurve import PrivateKey, PublicKeyXOnly
-
         self._clock = clock or time.time
         self._aux_rand = aux_rand or (lambda: secrets.token_bytes(32))
-        self._key = PrivateKey(bytes.fromhex(secret_hex))
-        self.pubkey = PublicKeyXOnly.from_secret(self._key.secret).format().hex()
+        self._secret = bytes.fromhex(secret_hex)
+        self.pubkey = schnorr.pubkey_xonly(self._secret).hex()
         self.npub = encode_npub(bytes.fromhex(self.pubkey))
 
     def __repr__(self) -> str:
@@ -156,7 +156,7 @@ class Signer:
             ensure_ascii=False,
         )
         event_id = hashlib.sha256(payload.encode()).hexdigest()
-        signature = self._key.sign_schnorr(bytes.fromhex(event_id), self._aux_rand()).hex()
+        signature = schnorr.sign(self._secret, bytes.fromhex(event_id), self._aux_rand()).hex()
         return {
             "id": event_id,
             "pubkey": self.pubkey,
@@ -194,8 +194,6 @@ def generate_and_store(save) -> str:
 
 def verify_event(event: dict) -> bool:
     """True when the public signature matches the id. Used by tests."""
-    from coincurve import PublicKeyXOnly
-
     content = event["content"]
     payload = json.dumps(
         [0, event["pubkey"], event["created_at"], event["kind"], event["tags"], content],
@@ -204,5 +202,4 @@ def verify_event(event: dict) -> bool:
     )
     if hashlib.sha256(payload.encode()).hexdigest() != event["id"]:
         return False
-    public = PublicKeyXOnly(bytes.fromhex(event["pubkey"]))
-    return bool(public.verify(bytes.fromhex(event["sig"]), bytes.fromhex(event["id"])))
+    return schnorr.verify(bytes.fromhex(event["pubkey"]), bytes.fromhex(event["id"]), bytes.fromhex(event["sig"]))
