@@ -7,6 +7,8 @@ description: >-
 ---
 # Paranoy collection admin
 
+> **If the agent is set up wrong**, for example no tools are visible, a call says the key has not signed up or is not a member, or the person asks about the npub or profile, use the Paranoy agent setup skill (`setup`) first.
+
 Administer collections. Do not add evidence, claims, links, or contradictions. Content writes belong to a contributor, or to ledger mode when the owner asks.
 
 ## Placeholders

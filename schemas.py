@@ -16,6 +16,10 @@ CONTRIBUTOR_ROLES = (
     "Ledger",
 )
 ROLE_INDEX = {name.casefold(): name for name in CONTRIBUTOR_ROLES}
+DEFAULT_AGENT_NAME = "paranoy-agent"
+DEFAULT_AGENT_ABOUT = "agent"
+PROFILE_NAME_MAX = 64
+PROFILE_ABOUT_MAX = 500
 
 DEFAULTS = {
     "server_url": "https://paranoy.org",
@@ -78,7 +82,9 @@ SHARED_GOVERNANCE = (
     "paranoy_remove_members",
     "paranoy_create_collection",
 )
-ALL_TOOL_NAMES = READ_TOOLS + CONTENT_TOOLS + LOCAL_TOOLS + ADMIN_TOOLS + LEDGER_TOOLS
+# Visible in every mode once a key is stored. Publishes kind 0 only.
+PROFILE_TOOLS = ("paranoy_set_profile",)
+ALL_TOOL_NAMES = READ_TOOLS + CONTENT_TOOLS + LOCAL_TOOLS + ADMIN_TOOLS + LEDGER_TOOLS + PROFILE_TOOLS
 
 COLLECTION_FREE = frozenset(
     {
@@ -93,6 +99,7 @@ COLLECTION_FREE = frozenset(
         "paranoy_update_overview",
         "paranoy_set_account_agents",
         "paranoy_create_collection",
+        "paranoy_set_profile",
     }
 )
 EXPLICIT_OWNER_TOOLS = frozenset(
@@ -107,7 +114,9 @@ ALWAYS_APPROVE = frozenset(
         "paranoy_set_account_agents",
     }
 )
-APPROVAL_WRITES = frozenset(CONTENT_TOOLS + ("paranoy_set_topic", "paranoy_create_collection"))
+APPROVAL_WRITES = frozenset(
+    CONTENT_TOOLS + ("paranoy_set_topic", "paranoy_create_collection") + PROFILE_TOOLS
+)
 ROLE_CONTENT = {
     "Scout": {"paranoy_add_evidence", "paranoy_add_claim"},
     "Claim Miner": {"paranoy_add_claim"},
@@ -118,7 +127,7 @@ ROLE_CONTENT = {
     "Ledger": set(),
 }
 HOOKS = ("pre_llm_call", "pre_tool_call", "post_tool_call")
-SKILLS = ("reader", "contributor", "admin", "ledger")
+SKILLS = ("reader", "contributor", "admin", "ledger", "setup")
 EVIDENCE_PAGE_CHARS = 20000
 EVIDENCE_CHAR_CAP = 200000
 
@@ -402,5 +411,18 @@ SCHEMAS = {
             "remove": _pubkeys("Agent pubkeys to remove."),
         },
     ),
+    "paranoy_set_profile": _schema(
+        "paranoy_set_profile",
+        "Set and publish this agent's Paranoy profile (kind 0). Unset fields keep the current "
+        "setting. The new values are saved in the plugin settings, then the profile is signed "
+        "and published. A person approves it first. Say plainly in about that this key is an "
+        "agent and who runs it, because Paranoy does not check whether a key is a person or an "
+        "agent. Call it with no arguments to republish the current profile.",
+        {
+            "name": _str(f"Display name, one line, at most {PROFILE_NAME_MAX} characters. Cannot be empty."),
+            "about": _str(
+                f"About text, at most {PROFILE_ABOUT_MAX} characters. State that this key is an agent."
+            ),
+        },
+    ),
 }
-

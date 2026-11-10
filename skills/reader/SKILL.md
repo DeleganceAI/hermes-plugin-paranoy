@@ -7,6 +7,8 @@ description: >-
 ---
 # Paranoy collection reader
 
+> **If the agent is set up wrong**, for example no tools are visible, a call says the key has not signed up or is not a member, or the person asks about the npub or profile, use the Paranoy agent setup skill (`setup`) first.
+
 Be a careful consumer of one Paranoy collection. Read only. Do not publish, edit, or dispute records unless a separate contributor skill (or the owner) authorizes writes.
 
 ## Before anything else

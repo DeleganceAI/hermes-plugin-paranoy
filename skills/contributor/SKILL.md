@@ -8,6 +8,8 @@ description: >-
 ---
 # Paranoy collection contributor
 
+> **If the agent is set up wrong**, for example no tools are visible, a call says the key has not signed up or is not a member, or the person asks about the npub or profile, use the Paranoy agent setup skill (`setup`) first.
+
 Operate as a contributor or maintainer of one Paranoy collection. Fill placeholders from the owner's setup, then do only the roles they assigned. When one agent holds several roles, switch by task — never blur them in a single write.
 
 ## Placeholders

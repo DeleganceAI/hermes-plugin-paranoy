@@ -11,6 +11,62 @@ from .quotes import quote_in_evidence
 _OPTIONAL_EVIDENCE = ("url", "title", "source", "archive_url", "retrieved_via")
 
 
+def profile_content(settings: dict) -> dict:
+    """Kind 0 content from settings. The defaults live here and nowhere else."""
+    return {
+        "name": str(settings.get("agent_name") or "").strip() or schemas.DEFAULT_AGENT_NAME,
+        "about": str(settings.get("agent_about") or "").strip() or schemas.DEFAULT_AGENT_ABOUT,
+    }
+
+
+def profile_event(service, settings: dict) -> dict:
+    return service.sign(0, profile_content(settings))
+
+
+def terms_event(service, settings: dict) -> dict:
+    return service.sign(
+        4706,
+        {
+            "version": str(settings.get("terms_version") or schemas.TERMS_VERSION),
+            "sha256": str(settings.get("terms_sha256") or schemas.TERMS_SHA256),
+        },
+    )
+
+
+def not_admitted(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return "has not signed up" in lowered or "not a member of any collection" in lowered
+
+
+def profile_refusal(message: str, npub: str, settings: dict, *, saved_note: str) -> str:
+    """Plain explanation of a refused kind 0. ``saved_note`` says what was kept."""
+    if not_admitted(message):
+        server = str(settings.get("server_url") or schemas.DEFAULTS["server_url"]).rstrip("/")
+        return (
+            "Paranoy does not know this key yet, so it refused the profile. "
+            f"The owner has to add this npub under Your agents on {server}/connect first: {npub}. "
+            + saved_note
+        )
+    return f"The server refused the profile: {message}. " + saved_note
+
+
+def publish_profile(service, settings: dict) -> dict:
+    """Sign and publish one kind 0 with the current settings.
+
+    The server accepts a profile from any key that has an account or belongs
+    to a collection. It does not need a terms signature. The latest profile
+    by received_at is the one readers show.
+    """
+    event = profile_event(service, settings)
+    result = service.publish([event])
+    state.update_state(profile_published_at=now_iso())
+    payload = dict(result) if isinstance(result, dict) else {"result": result}
+    payload["profile"] = profile_content(settings)
+    payload["event_id"] = event.get("id")
+    payload["stored_kind"] = 0
+    return payload
+
+
 def preface(service, settings: dict, events: list[dict]) -> list[dict]:
     """Sign terms and a kind 0 profile once, ahead of an allowed write."""
     if not settings.get("auto_sign_terms"):
@@ -18,15 +74,7 @@ def preface(service, settings: dict, events: list[dict]) -> list[dict]:
     saved = state.load_state()
     if saved.get("terms_published"):
         return events
-    name = settings.get("agent_name") or "paranoy-agent"
-    about = settings.get("agent_about") or "agent"
-    terms = service.sign(
-        4706,
-        {"version": str(settings.get("terms_version") or schemas.TERMS_VERSION),
-         "sha256": str(settings.get("terms_sha256") or schemas.TERMS_SHA256)},
-    )
-    profile = service.sign(0, {"name": name, "about": about})
-    return [terms, profile, *events]
+    return [terms_event(service, settings), profile_event(service, settings), *events]
 
 
 def publish(service, settings: dict, events: list[dict]) -> dict:
@@ -39,25 +87,8 @@ def publish(service, settings: dict, events: list[dict]) -> dict:
         if "sign the current terms first" in message and not included_terms:
             state.update_state(terms_published=False)
             batch = preface(service, {**settings, "auto_sign_terms": True}, events)
-            # preface still skips when the flag is already set; force the events.
             if not any(event.get("kind") == 4706 for event in batch):
-                batch = [
-                    service.sign(
-                        4706,
-                        {
-                            "version": str(settings.get("terms_version") or schemas.TERMS_VERSION),
-                            "sha256": str(settings.get("terms_sha256") or schemas.TERMS_SHA256),
-                        },
-                    ),
-                    service.sign(
-                        0,
-                        {
-                            "name": settings.get("agent_name") or "paranoy-agent",
-                            "about": settings.get("agent_about") or "agent",
-                        },
-                    ),
-                    *events,
-                ]
+                batch = [terms_event(service, settings), profile_event(service, settings), *events]
             result = service.publish(batch)
         else:
             raise
