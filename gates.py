@@ -110,6 +110,9 @@ def tool_visible(settings: dict, tool_name: str) -> bool:
     """False hides the tool from the model."""
     mode = settings.get("mode") or "reader"
     has_key = bool(settings.get("key_configured"))
+    if tool_name in schemas.PROFILE_TOOLS:
+        # Any mode, with or without a pinned collection. Only a key is needed.
+        return has_key
     if tool_name in schemas.READ_TOOLS:
         if not has_key:
             return False
@@ -293,6 +296,52 @@ def status_text(settings: dict) -> str:
     return "\n".join(lines)
 
 
+PROFILE_ANY_MODE = (
+    "The profile can be set in any mode, with or without a collection, by calling "
+    "paranoy_set_profile. The mode does not need to change for it."
+)
+
+
+def setup_hints(settings: dict, npub: str | None, saved: dict | None = None) -> list[str]:
+    """Short setup lines for the model. Empty once nothing obvious is missing.
+
+    Only local facts are used: whether a key is stored, the pinned
+    collection, the mode and roles, and whether this plugin has published a
+    profile. Membership is a server fact, so it is phrased as what to check.
+    """
+    saved = saved if saved is not None else state.load_state()
+    mode = settings.get("mode") or "reader"
+    server = str(settings.get("server_url") or schemas.DEFAULTS["server_url"]).rstrip("/")
+    if not settings.get("key_configured") or not npub:
+        return [
+            "Setup: no agent key is stored, so every Paranoy tool is hidden. "
+            "The user has to run `hermes paranoy keygen` in a terminal. You cannot do it. "
+            "Never ask for or handle a secret. See the setup skill."
+        ]
+    lines: list[str] = []
+    if not settings.get("collection") and mode in {"reader", "contributor"}:
+        lines.append(
+            f"Setup: no collection is pinned. Agent npub: {npub}. Call paranoy_list_collections. "
+            f"If it is empty, the owner adds this npub on {server}/connect under Your agents, "
+            "then ticks it under Where they work, or a collection owner adds the owner first. "
+            "Then the user types `/paranoy collection <slug>`, and `/paranoy mode <mode>` if "
+            "the mode should change. You cannot pin a collection or change the mode yourself."
+        )
+    if mode == "contributor" and not settings.get("roles_list"):
+        lines.append("Setup: contributor mode has no roles. The user types `/paranoy roles <roles>`.")
+    elif mode == "contributor" and not settings.get("active_role"):
+        lines.append("Setup: more than one role is set. Pick one with paranoy_set_active_role.")
+    if not saved.get("profile_published_at") and not saved.get("terms_published"):
+        lines.append(
+            "Setup: no profile has been published from this plugin. Offer paranoy_set_profile "
+            "with a name and an about that says this key is an agent. A person approves it. "
+            + PROFILE_ANY_MODE
+        )
+    if lines:
+        lines.append("For the full steps, use the setup skill.")
+    return lines
+
+
 def prompt_context(settings: dict) -> str:
     """User-message context. It does not include the secret."""
     owner = settings["owner"] or "the owner"
@@ -304,6 +353,15 @@ def prompt_context(settings: dict) -> str:
     roles = settings["roles"] or "(none)"
     active = settings["active_role"] or "(none)"
     managed = settings["collections"] or "(every collection this key administers, in admin mode)"
+    try:
+        hints = setup_hints(settings, _npub() if settings.get("key_configured") else None)
+    except Exception:
+        hints = []
+    if not hints:
+        hints = [
+            "Setup looks complete. For a not-a-member error, or a setup or profile question, "
+            "use the setup skill. paranoy_set_profile works in any mode."
+        ]
     return "\n".join(
         [
             "Paranoy plugin context.",
@@ -324,6 +382,7 @@ def prompt_context(settings: dict) -> str:
             f"COLLECTION={settings['collection'] or '(unset)'}; "
             f"ROLES={roles}; REPORT_TO={settings['report_to'] or '(unset)'}; "
             f"STATE_DIR={state_path}. KEY_PATH is not a file. The plugin holds the key.",
+            *hints,
         ]
     )
 
@@ -332,14 +391,107 @@ def _reject_secret_text(value: str) -> bool:
     return value.strip().startswith("nsec1") or str(value).lower() in _BLOCKED_ARG_KEYS
 
 
-def slash_result(ctx, raw_args: str) -> str:
-    """``/paranoy`` subcommands. Secret-looking arguments are not saved or echoed."""
+def profile_value(field: str, value) -> str:
+    """Check one profile field before it is saved. Raises PluginError."""
+    text = str(value if value is not None else "").strip()
+    if _reject_secret_text(text) or "nsec1" in text:
+        raise PluginError("That value was not saved.")
+    if field == "name":
+        if not text:
+            raise PluginError("The profile name cannot be empty.")
+        if "\n" in text or "\r" in text:
+            raise PluginError("The profile name has to be one line.")
+        if len(text) > schemas.PROFILE_NAME_MAX:
+            raise PluginError(f"The profile name is longer than {schemas.PROFILE_NAME_MAX} characters.")
+        return text
+    if field == "about":
+        if not text:
+            raise PluginError("The about text cannot be empty.")
+        if len(text) > schemas.PROFILE_ABOUT_MAX:
+            raise PluginError(f"The about text is longer than {schemas.PROFILE_ABOUT_MAX} characters.")
+        return text
+    raise PluginError("Profile fields are name and about.")
+
+
+def profile_text(settings: dict) -> str:
+    from .runtime import profile_content
+
+    content = profile_content(settings)
+    name_note = "" if settings.get("agent_name") else " (default, agent_name is unset)"
+    about_note = "" if settings.get("agent_about") else " (default, agent_about is unset)"
+    return "\n".join(
+        [
+            f"name: {content['name']}{name_note}",
+            f"about: {content['about']}{about_note}",
+            f"npub: {_npub() or '(no key)'}",
+            "Change with /paranoy profile name <text> or /paranoy profile about <text>.",
+            "Send it with /paranoy profile publish.",
+        ]
+    )
+
+
+PROFILE_USAGE = "Usage: /paranoy profile [name <text>|about <text>|publish]"
+USAGE = "Usage: /paranoy status|collection|mode|roles|whoami|profile"
+
+
+def _profile_command(ctx, settings: dict, parts: list[str], service_factory) -> str:
+    from .runtime import profile_content, publish_profile
+
+    sub = parts[1].lower() if len(parts) > 1 else ""
+    value = " ".join(parts[2:]).strip()
+    if not sub:
+        return profile_text(settings)
+    if sub in {"name", "about"}:
+        if not value:
+            return f"{sub}: {profile_content(settings)[sub]}"
+        try:
+            cleaned = profile_value(sub, value)
+        except PluginError as exc:
+            return str(exc)
+        ctx.set_config("agent_name" if sub == "name" else "agent_about", cleaned)
+        return f"{sub}: {cleaned}\nSaved. Run /paranoy profile publish to send it."
+    if sub == "publish":
+        if value:
+            return PROFILE_USAGE
+        if not settings.get("key_configured") or service_factory is None:
+            return "No agent key is stored in Hermes yet. Run hermes paranoy keygen in a terminal."
+        from .runtime import profile_refusal
+
+        try:
+            service = service_factory(settings)
+            result = publish_profile(service, settings)
+        except PluginError as exc:
+            return profile_refusal(
+                str(exc),
+                _npub() or "(no key)",
+                settings,
+                saved_note="The saved name and about go out on the next /paranoy profile publish.",
+            )
+        profile = result.get("profile") or {}
+        return "\n".join(
+            [
+                f"Published profile {result.get('event_id') or ''}".rstrip() + ".",
+                f"name: {profile.get('name')}",
+                f"about: {profile.get('about')}",
+            ]
+        )
+    return PROFILE_USAGE
+
+
+def slash_result(ctx, raw_args: str, service_factory=None) -> str:
+    """``/paranoy`` subcommands. Secret-looking arguments are not saved or echoed.
+
+    ``service_factory`` is only used by ``profile publish``. Typing that
+    command is the person's approval for the kind 0.
+    """
     settings = read_settings(ctx)
     parts = (raw_args or "").split()
     command = parts[0].lower() if parts else "status"
     argument = " ".join(parts[1:]).strip()
     if argument and _reject_secret_text(argument):
         return "That value was not saved."
+    if command == "profile":
+        return _profile_command(ctx, settings, parts, service_factory)
     if command == "status" and not argument:
         return status_text(settings)
     if command == "collection":
@@ -380,4 +532,4 @@ def slash_result(ctx, raw_args: str) -> str:
         return f"npub: {npub}"
     if command == "keygen":
         return "Keygen is a terminal command: hermes paranoy keygen"
-    return "Usage: /paranoy status|collection|mode|roles|whoami"
+    return USAGE

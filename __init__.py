@@ -11,7 +11,7 @@ from . import gates, schemas, state
 from .client import ParanoyClient, PluginError
 from .runtime import now_iso
 from .signing import SecretError, generate_and_store, load_secret_hex
-from .tools import governance, read, write
+from .tools import governance, profile, read, write
 from .tools.read import status as live_status
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,10 @@ def register(ctx):
         "contributor": "Contribute to one pinned Paranoy collection in the assigned roles.",
         "admin": "Administer Paranoy collections this key owns or administers. No content writes.",
         "ledger": "Account-wide steward for the owner's Paranoy ledger.",
+        "setup": (
+            "Set up this Paranoy agent: npub and status, getting added to a collection, "
+            "setting the profile name, and why the ledger is not visible."
+        ),
     }
     for skill_name in schemas.SKILLS:
         ctx.register_skill(
@@ -60,13 +64,13 @@ def register(ctx):
                 return json.dumps(payload, ensure_ascii=False)
             except PluginError as exc:
                 return gates.status_text(settings) + "\nserver: " + str(exc)
-        return gates.slash_result(ctx, raw_args)
+        return gates.slash_result(ctx, raw_args, service_factory)
 
     ctx.register_command(
         "paranoy",
         handler=slash,
-        description="Paranoy status, collection, mode, roles, and whoami",
-        args_hint="status|collection|mode|roles|whoami",
+        description="Paranoy status, collection, mode, roles, whoami, and profile",
+        args_hint="status|collection|mode|roles|whoami|profile [name <text>|about <text>|publish]",
     )
 
     def cli(args) -> None:
@@ -82,12 +86,21 @@ def register(ctx):
 
             print(generate_and_store(save))
             return
-        print("Usage: hermes paranoy <status|keygen>")
+        if command == "profile":
+            extra = " ".join(getattr(args, "profile_args", None) or [])
+            print(slash(("profile " + extra).strip()))
+            return
+        print("Usage: hermes paranoy <status|keygen|profile>")
 
     def setup_cli(subparser) -> None:
         subs = subparser.add_subparsers(dest="paranoy_command")
         subs.add_parser("status", help="Show mode, npub, and whether a key is configured")
         subs.add_parser("keygen", help="Generate an agent key and store it with Hermes")
+        profile_parser = subs.add_parser(
+            "profile",
+            help="Show, set, or publish the agent profile: [name <text>|about <text>|publish]",
+        )
+        profile_parser.add_argument("profile_args", nargs="*")
         subparser.set_defaults(func=cli)
 
     ctx.register_cli_command(
@@ -156,10 +169,14 @@ def register(ctx):
 
         return check_fn
 
+    def save_setting(key, value):
+        ctx.set_config(key, value)
+
     for spec in (
         *read.build(service_factory, settings_factory),
         *write.build(service_factory, settings_factory),
         *governance.build(service_factory, settings_factory),
+        *profile.build(service_factory, settings_factory, save_setting),
     ):
         ctx.register_tool(
             name=spec["name"],

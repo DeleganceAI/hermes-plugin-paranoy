@@ -1,5 +1,5 @@
 name: paranoy
-version: "0.2.1"
+version: "0.3.0"
 manifest_version: 2
 api_version: 1
 description: >
@@ -44,6 +44,7 @@ provides_tools:
   - paranoy_update_overview
   - paranoy_set_collection_agents
   - paranoy_set_account_agents
+  - paranoy_set_profile
 provides_hooks:
   - pre_llm_call
   - pre_tool_call
@@ -97,7 +98,9 @@ config_schema:
     type: str
     default: ""
     label: Agent name
-    description: Name for the kind 0 agent profile published with the first allowed write.
+    description: >
+      Name for the kind 0 agent profile. Published with the first allowed
+      write, or on demand with /paranoy profile publish or paranoy_set_profile.
   agent_about:
     type: str
     default: ""

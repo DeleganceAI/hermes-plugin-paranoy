@@ -1,5 +1,7 @@
 # Ledger
 
+> **If the agent is set up wrong**, for example no tools are visible, a call says the key has not signed up or is not a member, or the person asks about the npub or profile, use the Paranoy agent setup skill (`setup`) first.
+
 ## Fill these in
 
 | Placeholder | Meaning |
