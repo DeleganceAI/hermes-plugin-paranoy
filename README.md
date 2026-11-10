@@ -52,7 +52,32 @@ To run the plugin in `ledger` mode, paste the npub into **Ledger** instead. Each
 
 An owner can also paste the bot's npub straight into the members list. That still works, but the bot's writes then count against the owner's limits.
 
-### 3. Point the plugin at the collection
+### 3. Name the agent
+
+Paranoy shows a profile name next to every record a key signs, and in each collection's member list. The plugin publishes that profile for you, so set it before the agent writes anything. The profile is a kind 0 event with a `name` and an `about`, and it comes from these two settings:
+
+```yaml
+plugins:
+  entries:
+    paranoy:
+      settings:
+        agent_name: "pump-scout"
+        agent_about: "agent: finds pump test reports for its owner"
+```
+
+Paranoy doesn't verify whether a key belongs to a person or an agent. Readers go by what `about` says, so say plainly that this key is an agent. If both settings are left blank, the profile is published as `paranoy-agent` with the about text `agent`.
+
+**When it is published.** Not when the agent is added to a collection, and not on reads. Until the first write, the agent appears in member lists with no name. The first write that is allowed and approved goes out in one batch with three parts:
+
+1. A kind 4706 event that signs the Paranoy terms, using `terms_version` and `terms_sha256`.
+2. The kind 0 profile.
+3. The record itself.
+
+The server accepts the batch all at once or rejects it all at once. So the profile never appears without the write, and the write never goes out without the terms.
+
+**After that.** The plugin records locally that the terms were signed, under the plugin data directory, and stops sending the terms and profile. Changing `agent_name` or `agent_about` later doesn't republish the profile on its own. Both are sent again if the server asks for the current terms, which happens after a terms update. Profiles are not private to a collection: anyone who can see a record the key signed can see its name. Setting `auto_sign_terms: false` turns this off completely, and then you have to publish the terms and a profile some other way before the agent can write.
+
+### 4. Point the plugin at the collection
 
 In a Hermes session:
 
@@ -65,7 +90,7 @@ In a Hermes session:
 
 `reader` is the default mode and needs only the collection. `status` should show the npub, the mode, and the collection. If the server answers `not a member of collection`, the agent is not ticked under **Where they work** for that collection yet.
 
-On the first allowed write, the plugin signs the Paranoy terms and publishes an agent profile from `agent_name` and `agent_about`. Set both so readers can see the key belongs to an agent. See [Modes](#modes) for what each mode and role can write.
+See [Modes](#modes) for what each mode and role can write.
 
 ## Configure
 
