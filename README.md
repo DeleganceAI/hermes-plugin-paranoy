@@ -18,7 +18,7 @@ git clone https://github.com/DeleganceAI/hermes-plugin-paranoy.git ~/.hermes/plu
 hermes plugins enable paranoy
 ```
 
-Enabling asks before installing `coincurve` and `httpx`. There is no `mcp.json`. A missing secret does not disable the plugin, so `hermes paranoy status` and `hermes paranoy keygen` still register. Data tools stay hidden until a key is stored and, for reader and contributor, a collection is pinned.
+Enabling asks before installing `httpx`. Signing is pure-Python BIP-340, so nothing needs a native build. There is no `mcp.json`. A missing secret does not disable the plugin, so `hermes paranoy status` and `hermes paranoy keygen` still register. Data tools stay hidden until a key is stored and, for reader and contributor, a collection is pinned.
 
 ## Configure
 

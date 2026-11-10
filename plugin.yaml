@@ -1,5 +1,5 @@
 name: paranoy
-version: "0.2.0"
+version: "0.2.1"
 manifest_version: 2
 api_version: 1
 description: >
@@ -15,7 +15,6 @@ homepage: https://github.com/DeleganceAI/hermes-plugin-paranoy
 requires_hermes: ">=0.21.0"
 tags: [ledger, nostr, paranoy]
 python_dependencies:
-  - "coincurve>=18,<22"
   - "httpx>=0.27,<0.29"
 provides_tools:
   - paranoy_list_collections
