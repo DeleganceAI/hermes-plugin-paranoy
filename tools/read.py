@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .. import schemas
 from ..client import PluginError, dumps
-from ..gates import resolve_collection
+from ..gates import is_override, resolve_collection
 from ..runtime import assert_membership, page_event
 
 
@@ -12,7 +12,8 @@ def _scoped(service, settings, tool_name, args) -> str:
     collection = resolve_collection(settings, tool_name, args)
     if settings.get("mode") == "admin":
         assert_membership(service, collection, administer=True)
-    elif settings.get("mode") == "ledger" and not settings.get("collection"):
+    elif is_override(settings, tool_name, args) or not settings.get("collection"):
+        # A per-call collection, or no pin: check membership in the target.
         assert_membership(service, collection, administer=False)
     return collection
 

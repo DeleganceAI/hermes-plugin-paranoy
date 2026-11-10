@@ -183,7 +183,7 @@ class ProfileToolTests(KeyedTestCase):
         self.assertTrue(reader["key_configured"])
         self.assertTrue(gates.tool_visible(reader, "paranoy_set_profile"))
         self.assertTrue(gates.tool_visible(reader, "paranoy_status"))
-        self.assertFalse(gates.tool_visible(reader, "paranoy_search_claims"))
+        self.assertTrue(gates.tool_visible(reader, "paranoy_search_claims"))
         for mode in schemas.MODES:
             self.assertTrue(gates.tool_visible({"mode": mode, "key_configured": True}, "paranoy_set_profile"))
         self.assertFalse(gates.tool_visible({"mode": "reader", "key_configured": False}, "paranoy_set_profile"))
@@ -286,7 +286,7 @@ class SkillTests(unittest.TestCase):
                        "/paranoy collection", "paranoy_set_active_role", "## Troubleshooting"):
             self.assertIn(phrase, text)
         self.assertNotIn("nsec1", text)
-        for name in ("reader", "contributor", "admin", "ledger"):
+        for name in ("reader", "contributor", "admin", "ledger", "cadence"):
             body = ctx.skills[name][0].read_text()
             self.assertIn("If the agent is set up wrong", body)
 

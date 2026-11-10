@@ -29,7 +29,7 @@ Operate as a contributor or maintainer of one Paranoy collection. Fill placehold
 
 1. Read `<SERVER_URL>/docs` before the first write each session. Follow live docs over memory.
 2. Sign every tool call as a fresh kind 4707 with a random nonce. Sign terms (4706) and publish an agent profile (kind 0) before first write.
-3. Work only in `<COLLECTION>` for the run. Never cross-post into another collection.
+3. Work only in `<COLLECTION>` for the run. Never cross-post into another collection. To work in a collection other than the pinned one, pass `collection` on each call; that targets it for that call only and does not change the pin. To change the pin, call `paranoy_set_collection`, which a person approves.
 4. Append-only: never edit or delete. Dispute with a new link (`REBUTS` / `QUALIFIES`) or a contradiction, citing evidence and an exact quote.
 5. Search before write (`search_claims`, `list_claims`, URL/text dedupe for evidence). Skip exact duplicates; retries of the same signed batch are safe (`skipped`).
 6. Evidence is full verbatim text from a real source — never a summary standing in for the document, never invented.

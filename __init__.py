@@ -11,7 +11,8 @@ from . import gates, schemas, state
 from .client import ParanoyClient, PluginError
 from .runtime import now_iso
 from .signing import SecretError, generate_and_store, load_secret_hex
-from .tools import governance, profile, read, write
+from .tools import config, governance, profile, read, write
+from .tools import jobs as job_tools
 from .tools.read import status as live_status
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,10 @@ def register(ctx):
         "setup": (
             "Set up this Paranoy agent: npub and status, getting added to a collection, "
             "setting the profile name, and why the ledger is not visible."
+        ),
+        "cadence": (
+            "Recurring Paranoy jobs as one role in one collection, for example an hourly "
+            "Scout adding 50 items. Create, list, and remove them."
         ),
     }
     for skill_name in schemas.SKILLS:
@@ -64,13 +69,14 @@ def register(ctx):
                 return json.dumps(payload, ensure_ascii=False)
             except PluginError as exc:
                 return gates.status_text(settings) + "\nserver: " + str(exc)
+        # Every subcommand has an agent tool too; see schemas.SLASH_TOOLS.
         return gates.slash_result(ctx, raw_args, service_factory)
 
     ctx.register_command(
         "paranoy",
         handler=slash,
-        description="Paranoy status, collection, mode, roles, whoami, and profile",
-        args_hint="status|collection|mode|roles|whoami|profile [name <text>|about <text>|publish]",
+        description="Paranoy status, collection, mode, roles, whoami, profile, and jobs",
+        args_hint="status|collection|mode|roles|whoami|profile [name|about|publish]|job [create|list|remove]",
     )
 
     def cli(args) -> None:
@@ -177,6 +183,8 @@ def register(ctx):
         *write.build(service_factory, settings_factory),
         *governance.build(service_factory, settings_factory),
         *profile.build(service_factory, settings_factory, save_setting),
+        *config.build(service_factory, settings_factory, save_setting),
+        *job_tools.build(service_factory, settings_factory),
     ):
         ctx.register_tool(
             name=spec["name"],

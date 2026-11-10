@@ -237,21 +237,45 @@ def require_relation(value: str, *, gap_finder: bool = False) -> str:
     return relation
 
 
+MEMBER_ROLES = frozenset({"owner", "admin", "member"})
+
+
+def row_role(row: dict, pubkey: str | None) -> str | None:
+    """This key's role in one list_collections row.
+
+    The server's ``role`` wins. Some responses carry ``role: null`` for keys
+    that are on the lists, so owner, admins, and members are checked next.
+    """
+    role = row.get("role")
+    if role in MEMBER_ROLES:
+        return role
+    if not pubkey:
+        return None
+    if row.get("owner") == pubkey:
+        return "owner"
+    for field, name in (("admins", "admin"), ("members", "member")):
+        values = row.get(field)
+        if isinstance(values, list) and pubkey in values:
+            return name
+    return None
+
+
 def assert_membership(service, collection: str, *, administer: bool) -> dict:
     """Return the list_collections row or raise. ``administer`` requires owner or admin."""
     listed = service.call("list_collections", {})
     rows = listed.get("result") if isinstance(listed, dict) else None
     if not isinstance(rows, list):
-        raise PluginError("Collections could not be listed, so nothing was published.")
+        raise PluginError("Collections could not be listed, so nothing was done.")
+    pubkey = getattr(service, "pubkey", None)
     for row in rows:
         if isinstance(row, dict) and row.get("slug") == collection:
-            role = row.get("role")
+            role = row_role(row, pubkey)
             if administer and role not in {"owner", "admin"}:
-                raise PluginError("This key does not administer that collection.")
-            if role not in {"owner", "admin", "member"}:
-                raise PluginError("This key is not a member of that collection.")
+                raise PluginError(f"This key does not administer {collection}.")
+            if role not in MEMBER_ROLES:
+                raise PluginError(f"This key is not a member of {collection}.")
             return row
-    raise PluginError("This key is not a member of that collection.")
+    raise PluginError(f"This key is not a member of {collection}.")
 
 
 def reject_replacement_list(args: dict) -> None:
