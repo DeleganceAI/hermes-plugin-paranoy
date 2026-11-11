@@ -266,6 +266,9 @@ class SlashParityTests(KeyedTestCase):
         for sub in gates.PROFILE_SUBCOMMANDS:
             key = ("profile " + sub).strip()
             self.assertIn(key, schemas.SLASH_TOOLS, key)
+        for sub in gates.BELIEF_SUBCOMMANDS:
+            key = ("beliefs " + sub).strip()
+            self.assertIn(key, schemas.SLASH_TOOLS, key)
         for key, tool in schemas.SLASH_TOOLS.items():
             self.assertIn(key.split()[0], commands_seen, key)
             self.assertIn(tool, schemas.ALL_TOOL_NAMES, key)

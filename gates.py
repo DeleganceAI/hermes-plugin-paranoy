@@ -135,6 +135,7 @@ def tool_visible(settings: dict, tool_name: str) -> bool:
         tool_name in schemas.PROFILE_TOOLS
         or tool_name in schemas.CONFIG_TOOLS
         or tool_name in schemas.JOB_TOOLS
+        or tool_name in schemas.BELIEF_TOOLS
     ):
         # Any mode, with or without a pinned collection. Only a key is needed.
         return has_key
@@ -389,6 +390,8 @@ def pre_tool_directive(ctx, tool_name, args) -> dict | None:
                 "It builds a recurring Hermes job. Nothing is published now.",
             }
         return None
+    if name in schemas.BELIEF_TOOLS:
+        return _belief_directive(ctx, settings, payload)
     if name in schemas.CONFIG_APPROVAL:
         return _approval(
             ctx,
@@ -404,6 +407,43 @@ def pre_tool_directive(ctx, tool_name, args) -> dict | None:
         "Paranoy writes are disabled for unattended cron runs.",
         "Paranoy write needs a person's approval before it can run.",
     )
+
+
+def _belief_directive(ctx, settings: dict, args: dict) -> dict | None:
+    action = str((args or {}).get("action") or "status").strip().lower()
+    if action not in {"status", "consent", "scan", "propose", "approve"}:
+        return {"action": "block", "message": "action must be status, consent, scan, propose, or approve."}
+    if action == "status":
+        return None
+    if in_unattended_cron(ctx):
+        return {"action": "block", "message": "Paranoy belief scans are not run from inside a cron job."}
+    if action == "consent":
+        if not as_bool(args.get("consent"), False):
+            return {
+                "action": "block",
+                "message": "Pass consent true to record consent. The scan does not run until then.",
+            }
+        if settings["require_publish_approval"]:
+            return {
+                "action": "approve",
+                "message": (
+                    "Approve reading the current conversation locally to surface beliefs. "
+                    "Nothing is sent, and nothing is filed."
+                ),
+            }
+        return None
+    if action == "approve":
+        ids = args.get("ids")
+        shown = ids if isinstance(ids, str) else ", ".join(str(item) for item in (ids or []))
+        return _approval(
+            ctx,
+            settings,
+            "Paranoy belief scans are not run from inside a cron job.",
+            "Approve filing these beliefs as claims in a private collection: "
+            + (shown or "(none)")
+            + ". Other proposals stay unfiled. A public collection is refused.",
+        )
+    return None
 
 
 def _approval(ctx, settings: dict, cron_message: str, approve_message: str) -> dict | None:
@@ -590,7 +630,7 @@ def profile_text(settings: dict) -> str:
 
 PROFILE_USAGE = "Usage: /paranoy profile [name <text>|about <text>|publish]"
 USAGE = (
-    "Usage: /paranoy status|collection|mode|roles|whoami|profile|job\n"
+    "Usage: /paranoy status|collection|mode|roles|whoami|profile|job|beliefs\n"
     "       /paranoy capture [status|on|off|<key> <value>]"
 )
 JOB_USAGE = (
@@ -809,6 +849,37 @@ def _slash_job(ctx, settings, argument, parts, service_factory):
     return "\n".join(lines)
 
 
+def _slash_beliefs(ctx, settings, argument, parts, service_factory):
+    del ctx
+    from . import beliefs
+
+    sub = parts[1].lower() if len(parts) > 1 else "status"
+    rest = " ".join(parts[2:]).strip()
+    try:
+        if sub == "status":
+            return beliefs.format_status(beliefs.status())
+        if sub == "consent":
+            beliefs.record_consent(True)
+            return (
+                "Consent recorded. A scan reads the current session, or text you paste. "
+                "Nothing is sent yet."
+            )
+        if sub == "scan":
+            return beliefs.format_scan(beliefs.scan(rest or None))
+        if sub == "approve":
+            if not settings.get("key_configured") or service_factory is None:
+                return "No agent key is stored in Hermes yet. Run hermes paranoy keygen in a terminal."
+            ids = rest.split()
+            result = beliefs.approve(service_factory(settings), settings, ids, None)
+            return beliefs.format_approve(result)
+    except PluginError as exc:
+        return str(exc)
+    return (
+        "Usage: /paranoy beliefs [status|consent|scan [text]|approve <id>]\n"
+        "Nothing is filed until approve. The destination is a private collection you own."
+    )
+
+
 def _slash_keygen(ctx, settings, argument, parts, service_factory):
     return "Keygen is a terminal command: hermes paranoy keygen"
 
@@ -841,14 +912,16 @@ SLASH_COMMANDS = {
     "whoami": _slash_whoami,
     "profile": _slash_profile,
     "job": _slash_job,
+    "beliefs": _slash_beliefs,
     "keygen": _slash_keygen,
     "capture": _slash_capture,
 }
 PROFILE_SUBCOMMANDS = ("", "name", "about", "publish")
 JOB_SUBCOMMANDS = ("", "create", "list", "remove")
+BELIEF_SUBCOMMANDS = ("", "status", "consent", "scan", "approve")
 
 
-def slash_result(ctx, raw_args: str, service_factory=None) -> str:
+def slash_result(ctx, raw_args: str, service_factory=None, session_id: str | None = None) -> str:
     """``/paranoy`` subcommands. Secret-looking arguments are not saved or echoed.
 
     ``service_factory`` is used by ``profile publish`` and to check membership
@@ -863,4 +936,10 @@ def slash_result(ctx, raw_args: str, service_factory=None) -> str:
     handler = SLASH_COMMANDS.get(command)
     if handler is None:
         return USAGE
-    return handler(ctx, settings, argument, parts, service_factory)
+    from .beliefs import bind_session, reset_session
+
+    token = bind_session(session_id)
+    try:
+        return handler(ctx, settings, argument, parts, service_factory)
+    finally:
+        reset_session(token)

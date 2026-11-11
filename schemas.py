@@ -95,6 +95,8 @@ CONFIG_TOOLS = (
 )
 # Builds Hermes cron jobs for one role. Visible once a key is stored.
 JOB_TOOLS = ("paranoy_schedule_job",)
+# Reads the current conversation locally and files only approved beliefs.
+BELIEF_TOOLS = ("paranoy_surface_beliefs",)
 ALL_TOOL_NAMES = (
     READ_TOOLS
     + CONTENT_TOOLS
@@ -104,6 +106,7 @@ ALL_TOOL_NAMES = (
     + PROFILE_TOOLS
     + CONFIG_TOOLS
     + JOB_TOOLS
+    + BELIEF_TOOLS
 )
 
 COLLECTION_FREE = frozenset(
@@ -122,6 +125,7 @@ COLLECTION_FREE = frozenset(
         "paranoy_set_profile",
         *CONFIG_TOOLS,
         *JOB_TOOLS,
+        *BELIEF_TOOLS,
     }
 )
 EXPLICIT_OWNER_TOOLS = frozenset(
@@ -161,6 +165,12 @@ SLASH_TOOLS = {
     "job list": "paranoy_schedule_job",
     "job remove": "paranoy_schedule_job",
     "capture": "paranoy_set_capture",
+    "beliefs": "paranoy_surface_beliefs",
+    "beliefs status": "paranoy_surface_beliefs",
+    "beliefs consent": "paranoy_surface_beliefs",
+    "beliefs scan": "paranoy_surface_beliefs",
+    "beliefs propose": "paranoy_surface_beliefs",
+    "beliefs approve": "paranoy_surface_beliefs",
 }
 TERMINAL_ONLY = ("keygen",)
 ROLE_CONTENT = {
@@ -180,7 +190,7 @@ HOOKS = (
     "subagent_start",
     "subagent_stop",
 )
-SKILLS = ("reader", "contributor", "admin", "ledger", "setup", "cadence")
+SKILLS = ("reader", "contributor", "admin", "ledger", "setup", "cadence", "beliefs")
 EVIDENCE_PAGE_CHARS = 20000
 EVIDENCE_CHAR_CAP = 200000
 
@@ -554,5 +564,37 @@ SCHEMAS = {
         "Show this agent's npub and its saved profile name and about, the same as /paranoy "
         "whoami and /paranoy profile. No server call and no secret.",
         {},
+    ),
+    "paranoy_surface_beliefs": _schema(
+        "paranoy_surface_beliefs",
+        "Surface beliefs from the current conversation, the same as /paranoy beliefs. "
+        "action status shows whether the user has consented. action consent with consent true "
+        "records that consent. action scan reads the current Hermes session, or text the user "
+        "pasted, and returns the excerpts plus claim-shaped statements. It does not judge truth, "
+        "tone, or plausibility, and it sends nothing. action propose attaches underlying "
+        "assumptions. Those are your inference, not the user's words, and each quote must appear "
+        "in the excerpts. action approve files only the named proposals as claims in a private "
+        "collection this key owns, then searches that collection for evidence for and against. "
+        "A public collection is refused. Claims are present-tense world propositions: one scoped "
+        "claim, no can or may, not normative, and not a prediction of the future.",
+        {
+            "action": _str("status, consent, scan, propose, or approve."),
+            "consent": _bool("Explicit consent to read conversation history locally. Required with action consent."),
+            "text": _str("Conversation text to scan when session history is not available. Not sent anywhere."),
+            "candidates": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": (
+                    "For propose. Each object has claim, quote, assumptions (list of strings), "
+                    "and would_be_rebutted_by. The quote must be copied from the scan excerpts."
+                ),
+            },
+            "ids": _str_list("For approve. Proposal ids to file. Other proposals stay unfiled."),
+            "collection": _str(
+                "Private collection this key owns. Omit to use the pinned private collection, "
+                "or the only private one. A public collection is refused."
+            ),
+        },
+        ["action"],
     ),
 }

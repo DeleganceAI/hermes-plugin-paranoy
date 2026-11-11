@@ -8,7 +8,9 @@ description: >
   allowed writes are signed in-process and sent to server_url/mcp over
   HTTPS. fetch_url asks that server to fetch public http(s) documents.
   Rejects, the Ponder journal, role checkpoints, and overview.md are written
-  under the Hermes plugin data directory.
+  under the Hermes plugin data directory. After consent, a beliefs scan
+  reads the current Hermes session locally and files a claim only when the
+  user approves that item, in a private collection.
 author: DeleganceAI
 license: GPL-3.0
 homepage: https://github.com/DeleganceAI/hermes-plugin-paranoy
@@ -51,6 +53,7 @@ provides_tools:
   - paranoy_set_capture
   - paranoy_whoami
   - paranoy_schedule_job
+  - paranoy_surface_beliefs
 provides_hooks:
   - pre_llm_call
   - pre_tool_call
