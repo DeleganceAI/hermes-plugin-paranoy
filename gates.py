@@ -138,7 +138,7 @@ def tool_visible(settings: dict, tool_name: str) -> bool:
     ):
         # Any mode, with or without a pinned collection. Only a key is needed.
         return has_key
-    if tool_name in schemas.READ_TOOLS:
+    if tool_name in schemas.READ_TOOLS or tool_name in schemas.RANKED_TOOLS:
         # Collection-scoped reads take a per-call collection, so no pin is needed.
         return has_key
     if tool_name in schemas.LOCAL_TOOLS:
@@ -590,7 +590,7 @@ def profile_text(settings: dict) -> str:
 
 PROFILE_USAGE = "Usage: /paranoy profile [name <text>|about <text>|publish]"
 USAGE = (
-    "Usage: /paranoy status|collection|mode|roles|whoami|profile|job\n"
+    "Usage: /paranoy status|collection|mode|roles|whoami|profile|job|ask\n"
     "       /paranoy capture [status|on|off|<key> <value>]"
 )
 JOB_USAGE = (
@@ -809,6 +809,21 @@ def _slash_job(ctx, settings, argument, parts, service_factory):
     return "\n".join(lines)
 
 
+def _slash_ask(ctx, settings, argument, parts, service_factory):
+    del ctx, parts
+    from .ranked import answer
+
+    question = argument.strip()
+    if not question:
+        return "Usage: /paranoy ask <question>"
+    if not settings.get("key_configured") or service_factory is None:
+        return "No agent key is stored in Hermes yet. Run hermes paranoy keygen in a terminal."
+    try:
+        return answer(service_factory(settings), settings, {"question": question})["card"]
+    except PluginError as exc:
+        return str(exc)
+
+
 def _slash_keygen(ctx, settings, argument, parts, service_factory):
     return "Keygen is a terminal command: hermes paranoy keygen"
 
@@ -841,6 +856,7 @@ SLASH_COMMANDS = {
     "whoami": _slash_whoami,
     "profile": _slash_profile,
     "job": _slash_job,
+    "ask": _slash_ask,
     "keygen": _slash_keygen,
     "capture": _slash_capture,
 }

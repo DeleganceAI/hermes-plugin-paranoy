@@ -7,12 +7,13 @@ import logging
 import re
 from pathlib import Path
 
-from . import capture, gates, schemas, state
+from . import capture, gates, ranked, schemas, state
 from .client import ParanoyClient, PluginError
 from .runtime import now_iso, register_account
 from .signing import SecretError, generate_and_store, load_secret_hex
 from .tools import config, governance, profile, read, write
 from .tools import jobs as job_tools
+from .tools import ranked as ranked_tools
 from .tools.read import status as live_status
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,10 @@ def register(ctx):
         "cadence": (
             "Recurring Paranoy jobs as one role in one collection, for example an hourly "
             "Scout adding 50 items. Create, list, and remove them."
+        ),
+        "ranked": (
+            "Answer a question from the matching Paranoy collection as a ranked evidence card, "
+            "including what is the worst seed oil and why."
         ),
     }
     for skill_name in schemas.SKILLS:
@@ -75,8 +80,8 @@ def register(ctx):
     ctx.register_command(
         "paranoy",
         handler=slash,
-        description="Paranoy status, collection, mode, roles, whoami, profile, and jobs",
-        args_hint="status|collection|mode|roles|whoami|profile [name|about|publish]|job [create|list|remove]",
+        description="Paranoy status, collection, mode, roles, whoami, profile, jobs, capture, and ranked answers",
+        args_hint="status|collection|mode|roles|whoami|profile [name|about|publish]|job [create|list|remove]|capture [status|on|off]|ask <question>",
     )
 
     def keygen() -> str | None:
@@ -257,6 +262,7 @@ def register(ctx):
         *profile.build(service_factory, settings_factory, save_setting),
         *config.build(service_factory, settings_factory, save_setting),
         *job_tools.build(service_factory, settings_factory),
+        *ranked_tools.build(service_factory, settings_factory),
     ):
         ctx.register_tool(
             name=spec["name"],
