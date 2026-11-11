@@ -1,4 +1,4 @@
-"""Public catalog discovery and keygen registration. Network is mocked."""
+"""Public catalog discovery and kind 4715 registration. Network is mocked."""
 
 import argparse
 import json
@@ -19,16 +19,13 @@ CATALOG = {
         {
             "slug": "mcas-hit",
             "topic": "Histamine Intolerance and MCAS",
-            "created_at": "2026-10-21T14:48:54+00:00",
             "evidence": 5,
             "claims": 9,
             "links": 4,
             "contradictions": 1,
-            "last_at": "2026-11-09T10:44:04+00:00",
-            "contributors": 2,
-            "shape": {"nodes": [1, 2, 3], "edges": [[0, 1, "SUPPORTS"]]},
+            "shape": {"nodes": [1, 2, 3]},
             "daily": [0, 1, 2],
-            "supports": 3,
+            "contributors": 2,
         },
         {"slug": "grokbot", "topic": "Grok Bot", "evidence": 1, "claims": 1, "links": 0, "contradictions": 0},
         {"slug": "Not A Slug", "topic": "dropped"},
@@ -37,15 +34,22 @@ CATALOG = {
 }
 
 
-def mcp_ok(status, detail=""):
-    body = {"collection": "ignored", "status": status}
-    if detail:
-        body["detail"] = detail
-    return {"result": {"structuredContent": body}}
+def api_getter(url):
+    if not url.endswith("/api/public/collections"):
+        raise AssertionError(url)
+    return CATALOG
 
 
-def mcp_error(text):
-    return {"result": {"isError": True, "content": [{"type": "text", "text": text}]}}
+def register_response(event, collections=None, skipped=None):
+    return {
+        "ok": True,
+        "pubkey": event["pubkey"],
+        "npub": "npub1example",
+        "role": "member",
+        "collections": collections if collections is not None else [{"slug": "mcas-hit", "topic": "MCAS"}],
+        "accepted": [event["id"]],
+        "skipped": skipped or [],
+    }
 
 
 class ChoiceTests(unittest.TestCase):
@@ -58,11 +62,21 @@ class ChoiceTests(unittest.TestCase):
             public.parse_collection_choice(" grokbot, mcas-hit, grokbot "),
             ("slugs", ("grokbot", "mcas-hit")),
         )
+        self.assertEqual(public.registration_content(("all", ())), {"all": True})
+        self.assertEqual(public.registration_content(("none", ())), {"collections": []})
+        self.assertEqual(
+            public.registration_content(("slugs", ("grokbot",))),
+            {"collections": ["grokbot"]},
+        )
 
     def test_bad_choice_is_refused(self):
         for value in ("Bad Slug", "all, grokbot", "none,grokbot", "../etc"):
             with self.assertRaises(PluginError):
                 public.parse_collection_choice(value)
+        too_many = ",".join(f"c{index}" for index in range(101))
+        with self.assertRaises(PluginError) as caught:
+            public.parse_collection_choice(too_many)
+        self.assertIn("100", str(caught.exception))
 
     def test_flag_overrides_config(self):
         self.assertEqual(public.resolve_choice(None, "none"), ("none", ()))
@@ -75,12 +89,13 @@ class CatalogTests(KeyedTestCase):
         public.use_transport()
         super().tearDown()
 
-    def test_normalize_drops_display_fields_and_bad_rows(self):
+    def test_normalize_keeps_the_contract_fields(self):
         rows = public.normalize_public_rows(CATALOG)
         self.assertEqual([row["slug"] for row in rows], ["mcas-hit", "grokbot"])
         self.assertTrue(rows[0]["public"])
         self.assertNotIn("shape", rows[0])
         self.assertNotIn("daily", rows[0])
+        self.assertNotIn("contributors", rows[0])
         self.assertEqual(rows[0]["evidence"], 5)
         self.assertEqual(rows[0]["topic"], "Histamine Intolerance and MCAS")
 
@@ -88,14 +103,14 @@ class CatalogTests(KeyedTestCase):
         with self.assertRaises(PluginError):
             public.normalize_public_rows(["mcas-hit"])
         with self.assertRaises(PluginError):
-            public.showcase_url("paranoy.org")
+            public.origin("paranoy.org")
 
-    def test_fetch_caches_and_the_tool_marks_membership(self):
+    def test_fetch_uses_the_public_api_and_caches_it(self):
         seen = []
 
         def getter(url):
             seen.append(url)
-            return CATALOG
+            return api_getter(url)
 
         public.use_transport(getter=getter)
         service = FakeService(plugin)
@@ -104,18 +119,46 @@ class CatalogTests(KeyedTestCase):
         }
         settings = gates.read_settings(Ctx(server_url="https://paranoy.example"))
         payload = public.list_for_agent(service, settings)
-        self.assertEqual(seen, ["https://paranoy.example/showcase.json"])
+        self.assertEqual(seen, ["https://paranoy.example/api/public/collections"])
         by_slug = {row["slug"]: row for row in payload["collections"]}
         self.assertFalse(by_slug["mcas-hit"]["member"])
         self.assertTrue(by_slug["grokbot"]["member"])
         self.assertNotIn("shape", json.dumps(payload))
         cached = public.cached_snapshot()
-        self.assertEqual(cached["source"], "GET /showcase.json")
+        self.assertEqual(cached["source"], "GET /api/public/collections")
         self.assertEqual([row["slug"] for row in cached["collections"]], ["mcas-hit", "grokbot"])
-        self.assertNotIn("member", cached["collections"][0])
+
+    def test_showcase_is_only_a_fallback_when_the_new_route_is_missing(self):
+        def getter(url):
+            if url.endswith("/api/public/collections"):
+                raise public._MissingEndpoint("missing")
+            if url.endswith("/showcase.json"):
+                return CATALOG
+            raise AssertionError(url)
+
+        rows, source = public.fetch_public_collections("https://paranoy.example", getter=getter)
+        self.assertEqual(source, "GET /showcase.json")
+        self.assertEqual(rows[0]["slug"], "mcas-hit")
+
+    def test_mcp_catalog_is_used_when_http_is_missing(self):
+        def getter(url):
+            raise public._MissingEndpoint(url)
+
+        service = FakeService(plugin)
+        service.responses["list_public_collections"] = {"collections": [{"slug": "grokbot", "topic": "Grok"}]}
+        rows, source = public.fetch_public_collections(
+            "https://paranoy.example", getter=getter, client=service
+        )
+        self.assertEqual(source, "MCP list_public_collections")
+        self.assertEqual(rows[0]["slug"], "grokbot")
+        self.assertEqual(service.calls[0][0], "list_public_collections")
 
     def test_a_failed_refresh_returns_the_cache(self):
-        public.cache_public(public.normalize_public_rows(CATALOG), fetched_at="2026-11-11T00:00:00Z")
+        public.cache_public(
+            public.normalize_public_rows(CATALOG),
+            source="GET /api/public/collections",
+            fetched_at="2026-11-11T00:00:00Z",
+        )
 
         def getter(url):
             raise PluginError("Could not reach the Paranoy server.")
@@ -129,16 +172,14 @@ class CatalogTests(KeyedTestCase):
         self.assertIsNone(payload["collections"][0]["member"])
 
     def test_slash_public_lists_the_catalog(self):
-        def getter(url):
-            return CATALOG
-
-        public.use_transport(getter=getter)
+        public.use_transport(getter=api_getter)
         ctx = Ctx(server_url="https://paranoy.example", mode="reader")
         service = FakeService(plugin)
         service.responses["list_collections"] = {"result": []}
         text = gates.slash_result(ctx, "public", lambda settings: service)
         self.assertIn("mcas-hit", text)
         self.assertIn("not a member", text)
+        self.assertIn("/api/public/collections", text)
         self.assertNotIn("nsec1", text)
         self.assertIn("Usage:", gates.slash_result(ctx, "public extra", lambda settings: service))
 
@@ -148,113 +189,137 @@ class RegisterTests(KeyedTestCase):
         public.use_transport()
         super().tearDown()
 
-    def _client(self, secret, poster):
-        return plugin.client.ParanoyClient(
-            "https://paranoy.example",
-            secret,
-            poster=poster,
-            clock=lambda: 1_700_000_000,
-        )
-
-    def test_register_key_signs_the_contract_and_hides_the_secret(self):
+    def test_all_signs_one_4715_and_hides_the_secret(self):
         secret = "ab" * 32
         seen = []
 
-        def poster(url, payload):
-            seen.append((url, payload))
-            return mcp_ok("pending", "owner approval required")
+        def register_post(url, body):
+            seen.append((url, body))
+            return register_response(
+                body["event"],
+                collections=[{"slug": "mcas-hit", "topic": "MCAS"}, {"slug": "grokbot", "topic": "Grok"}],
+                skipped=["blocked-one"],
+            )
 
-        client = self._client(secret, poster)
-        result = public.register_key("mcas-hit", client.pubkey.upper(), client=client)
-        self.assertEqual(result["status"], "pending")
-        self.assertEqual(result["detail"], "owner approval required")
-        self.assertEqual(seen[0][0], "https://paranoy.example/mcp")
-        request = seen[0][1]["params"]["arguments"]["request"]
-        content = json.loads(request["content"])
-        self.assertEqual(content["tool"], "register_key")
-        self.assertEqual(content["args"]["collection"], "mcas-hit")
-        self.assertEqual(content["args"]["pubkey"], client.pubkey)
-        self.assertEqual(list(seen[0][1]["params"]["arguments"]), ["request"])
+        report = public.register_stored(
+            "https://paranoy.example",
+            secret,
+            ("all", ()),
+            getter=api_getter,
+            register_post=register_post,
+        )
+        self.assertIsNone(report["error"])
+        self.assertEqual(seen[0][0], "https://paranoy.example/api/public/register")
+        event = seen[0][1]["event"]
+        self.assertEqual(event["kind"], 4715)
+        self.assertEqual(json.loads(event["content"]), {"all": True})
+        self.assertEqual(list(seen[0][1]), ["event"])
         self.assertNotIn(secret, json.dumps(seen))
-        self.assertNotIn("nsec1", json.dumps(seen))
-        self.assertTrue(plugin.signing.verify_event(request))
-        with self.assertRaises(PluginError):
-            public.register_key("mcas-hit", "cd" * 32, client=client)
-        self.assertEqual(len(seen), 1)
+        self.assertTrue(plugin.signing.verify_event(event))
+        text = public.format_registration(report, secret_hex=secret)
+        self.assertIn("role: member", text)
+        self.assertIn("mcas-hit", text)
+        self.assertIn("blocked-one", text)
+        self.assertIn("immediate", text)
+        self.assertIn("kind 4706", text)
+        self.assertNotIn(secret, text)
+        self.assertNotIn("waiting for approval", text)
 
-    def test_each_collection_is_reported_and_one_failure_does_not_stop_the_rest(self):
-        secret = "cd" * 32
-        calls = []
+    def test_none_clears_the_set_without_listing_the_catalog(self):
+        def getter(url):
+            raise AssertionError(url)
 
-        def poster(url, payload):
-            request = payload["params"]["arguments"]["request"]
-            slug = json.loads(request["content"])["args"]["collection"]
-            calls.append(slug)
-            if slug == "mcas-hit":
-                return mcp_error("This collection requires approval.")
-            if slug == "grokbot":
-                return mcp_ok("registered")
-            return mcp_error("no such collection")
+        seen = []
 
-        client = self._client(secret, poster)
-        rows = public.normalize_public_rows(CATALOG)
-        # ufo is not public. The two catalog slugs are called even after a pending error.
-        results = public.register_selection(client, ("slugs", ("mcas-hit", "ufo-uap-worldview", "grokbot")), rows)
-        self.assertEqual(calls, ["mcas-hit", "grokbot"])
-        by_slug = {row["collection"]: row["status"] for row in results}
-        self.assertEqual(by_slug["mcas-hit"], "pending")
-        self.assertEqual(by_slug["ufo-uap-worldview"], "skipped")
-        self.assertEqual(by_slug["grokbot"], "registered")
-        self.assertNotIn(secret, json.dumps(results))
+        def register_post(url, body):
+            seen.append(json.loads(body["event"]["content"]))
+            return register_response(body["event"], collections=[])
 
-    def test_offline_is_reported_for_every_remaining_collection(self):
-        calls = []
+        report = public.register_stored(
+            "https://paranoy.example",
+            "cd" * 32,
+            ("none", ()),
+            getter=getter,
+            register_post=register_post,
+        )
+        self.assertEqual(seen, [{"collections": []}])
+        self.assertEqual(report["signed_content"], {"collections": []})
+        self.assertIsNone(report["error"])
 
-        def poster(url, payload):
-            calls.append(url)
-            raise ConnectionError("down")
+    def test_a_slug_list_drops_slugs_that_are_not_public(self):
+        seen = []
 
-        client = self._client("ef" * 32, poster)
-        rows = public.normalize_public_rows(CATALOG)
-        results = public.register_selection(client, ("all", ()), rows)
-        self.assertEqual(len(calls), 1)
-        self.assertEqual([row["status"] for row in results], ["offline", "offline"])
+        def register_post(url, body):
+            seen.append(json.loads(body["event"]["content"]))
+            return register_response(body["event"], collections=[{"slug": "grokbot", "topic": "Grok"}])
 
-    def test_errors_are_classified_without_crashing(self):
-        secret = "11" * 32
+        report = public.register_stored(
+            "https://paranoy.example",
+            "ef" * 32,
+            ("slugs", ("grokbot", "not-public")),
+            getter=api_getter,
+            register_post=register_post,
+        )
+        self.assertEqual(seen, [{"collections": ["grokbot"]}])
+        self.assertEqual(report["omitted"], ["not-public"])
+        text = public.format_registration(report)
+        self.assertIn("not-public", text)
 
-        def classify(text):
-            def poster(url, payload):
-                return mcp_error(text)
+    def test_no_public_slug_does_not_send_an_empty_clear(self):
+        def register_post(url, body):
+            raise AssertionError("empty list would clear registration")
 
-            client = self._client(secret, poster)
-            try:
-                public.register_key("grokbot", client.pubkey, client=client)
-            except PluginError as exc:
-                return public.classify_error("grokbot", exc)["status"]
+        report = public.register_stored(
+            "https://paranoy.example",
+            "11" * 32,
+            ("slugs", ("not-public",)),
+            getter=api_getter,
+            register_post=register_post,
+        )
+        self.assertIn("no kind 4715", report["error"])
 
-        self.assertEqual(classify("unknown tool: register_key"), "unavailable")
-        self.assertEqual(classify("already a member of this collection"), "already")
-        self.assertEqual(classify("already pending"), "already")
-        self.assertEqual(classify("awaiting owner approval"), "pending")
-        self.assertEqual(classify("the owner refused this key"), "rejected")
+    def test_publish_is_the_fallback_when_register_is_missing(self):
+        posted = []
 
-    def test_a_repeated_registration_is_already(self):
-        secret = "22" * 32
-        answers = [mcp_ok("registered"), mcp_error("duplicate request")]
+        def register_post(url, body):
+            raise public._MissingEndpoint("no register route")
 
-        def poster(url, payload):
-            return answers.pop(0)
+        def mcp_poster(url, payload):
+            posted.append((url, payload))
+            event = payload["params"]["arguments"]["events"][0]
+            self.assertEqual(event["kind"], 4715)
+            return {"result": {"structuredContent": {"accepted": [event["id"]], "skipped": [], "collections": []}}}
 
-        client = self._client(secret, poster)
-        first = public.register_key("grokbot", client.pubkey, client=client)
-        try:
-            public.register_key("grokbot", client.pubkey, client=client)
-            second = {"status": "registered"}
-        except PluginError as exc:
-            second = public.classify_error("grokbot", exc)
-        self.assertEqual(first["status"], "registered")
-        self.assertEqual(second["status"], "already")
+        report = public.register_stored(
+            "https://paranoy.example",
+            "22" * 32,
+            ("all", ()),
+            getter=api_getter,
+            register_post=register_post,
+            mcp_poster=mcp_poster,
+        )
+        self.assertEqual(report["via"], "MCP publish")
+        self.assertEqual(posted[0][0], "https://paranoy.example/mcp")
+        self.assertEqual(json.loads(posted[0][1]["params"]["arguments"]["events"][0]["content"]), {"all": True})
+        self.assertNotIn("22" * 32, json.dumps(posted))
+
+    def test_a_repeat_sends_another_4715(self):
+        contents = []
+
+        def register_post(url, body):
+            contents.append(json.loads(body["event"]["content"]))
+            return register_response(body["event"])
+
+        for _ in range(2):
+            report = public.register_stored(
+                "https://paranoy.example",
+                "33" * 32,
+                ("all", ()),
+                getter=api_getter,
+                register_post=register_post,
+            )
+            self.assertIsNone(report["error"])
+        self.assertEqual(contents, [{"all": True}, {"all": True}])
 
     def test_keygen_stores_before_register_and_never_prints_the_secret(self):
         secret_box = {}
@@ -277,42 +342,37 @@ class RegisterTests(KeyedTestCase):
             def getter(url):
                 order.append("get")
                 self.assertNotIn(secret_box["value"], url)
-                return CATALOG
+                return api_getter(url)
 
-            def poster(url, payload):
+            def register_post(url, body):
                 order.append("post")
-                encoded = json.dumps(payload)
+                encoded = json.dumps(body)
                 self.assertNotIn(secret_box["value"], encoded)
-                slug = json.loads(payload["params"]["arguments"]["request"]["content"])["args"]["collection"]
-                if slug == "mcas-hit":
-                    return mcp_error("approval required")
-                return {"result": {"isError": True, "content": [{"text": "Could not reach the Paranoy server."}]}}
+                self.assertEqual(json.loads(body["event"]["content"]), {"all": True})
+                return register_response(body["event"], skipped=["blocked-one"])
 
             text = public.keygen_from_settings(
                 save,
                 server_url="https://paranoy.example",
                 cli_value=None,
                 config_value="all",
-                poster=poster,
                 getter=getter,
+                register_post=register_post,
             )
         finally:
             root.removeHandler(handler)
         secret = secret_box["value"]
         self.assertEqual(secret_box["key"], schemas.SECRET_ENV)
         self.assertEqual(order[0], "save")
-        self.assertIn("get", order)
+        self.assertIn("post", order)
         self.assertNotIn(secret, text)
         self.assertNotIn("nsec1", text)
         self.assertIn("npub1", text)
-        self.assertIn("mcas-hit: pending", text)
-        self.assertIn("grokbot: offline", text)
-        self.assertIn("The key was kept", text)
-        self.assertIn("hermes paranoy register", text)
+        self.assertIn('{"all":true}', text)
+        self.assertIn("blocked-one", text)
         state_text = (plugin.state.data_dir() / "state.json").read_text()
         self.assertNotIn(secret, state_text)
         self.assertIn("mcas-hit", state_text)
-        self.assertNotIn("shape", state_text)
         self.assertTrue(all(secret not in message for message in records))
 
     def test_a_store_failure_does_not_touch_the_network(self):
@@ -342,94 +402,60 @@ class RegisterTests(KeyedTestCase):
                 config_value="all",
             )
 
-    def test_none_skips_registration_and_keeps_the_summary_clean(self):
+    def test_offline_registration_keeps_the_key(self):
         stored = {}
 
         def save(key, value):
             stored["value"] = value
 
-        def getter(url):
-            raise AssertionError("none does not list collections")
-
-        text = public.keygen_from_settings(
-            save,
-            server_url="https://paranoy.example",
-            cli_value="none",
-            config_value="all",
-            getter=getter,
-        )
-        self.assertIn("skipped (none)", text)
-        self.assertNotIn(stored["value"], text)
-        self.assertNotIn("nsec1", text)
-
-    def test_discovery_failure_keeps_the_key(self):
-        stored = {}
-
-        def save(key, value):
-            stored["value"] = value
-
-        def getter(url):
+        def register_post(url, body):
             raise PluginError("Could not reach the Paranoy server.")
 
-        text = public.run_keygen(save, "https://paranoy.example", ("all", ()), getter=getter)
+        text = public.run_keygen(
+            save,
+            "https://paranoy.example",
+            ("all", ()),
+            getter=api_getter,
+            register_post=register_post,
+        )
         self.assertIn("npub1", text)
-        self.assertIn("could not list public collections", text)
+        self.assertIn("could not reach", text.lower())
+        self.assertIn("hermes paranoy register", text)
         self.assertNotIn(stored["value"], text)
-        self.assertTrue(stored["value"])
 
-    def test_register_stored_can_be_repeated(self):
-        secret = "33" * 32
-        calls = {"n": 0}
+    def test_a_rate_limit_is_reported_without_losing_the_key(self):
+        def save(key, value):
+            return None
 
-        def getter(url):
-            return {"collections": [{"slug": "grokbot", "topic": "Grok"}]}
+        def register_post(url, body):
+            raise PluginError("too many registration posts this hour")
 
-        def poster(url, payload):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return mcp_ok("pending", "waiting")
-            return mcp_error("already requested")
-
-        first = public.register_stored(
-            "https://paranoy.example", secret, ("all", ()), poster=poster, getter=getter
+        text = public.run_keygen(
+            save, "https://paranoy.example", ("none", ()), register_post=register_post
         )
-        second_calls = calls["n"]
-
-        def poster_again(url, payload):
-            calls["n"] += 1
-            return mcp_error("already a member")
-
-        second = public.register_stored(
-            "https://paranoy.example", secret, ("all", ()), poster=poster_again, getter=getter
-        )
-        self.assertEqual(first["results"][0]["status"], "pending")
-        self.assertEqual(second["results"][0]["status"], "already")
-        self.assertGreater(calls["n"], second_calls)
-        self.assertNotIn(secret, json.dumps(first))
-        self.assertNotIn(secret, json.dumps(second))
+        self.assertIn("30 registration posts", text)
+        self.assertIn("10 stored events", text)
+        self.assertIn("The key was kept", text)
 
     def test_a_server_that_echoes_the_secret_is_redacted(self):
         secret = "44" * 32
 
-        def save(key, value):
-            self.assertEqual(value, secret)
+        def register_post(url, body):
+            return {"ok": False, "error": "refused " + secret}
 
-        def getter(url):
-            return {"collections": [{"slug": "grokbot", "topic": "Grok"}]}
-
-        def poster(url, payload):
-            return mcp_error("refused " + secret + " nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq")
-
-        # The client is built inside run_keygen, so the secret it redacts is the one it generated.
-        # Drive register_stored with a known secret instead.
         report = public.register_stored(
-            "https://paranoy.example", secret, ("slugs", ("grokbot",)), poster=poster, getter=getter
+            "https://paranoy.example",
+            secret,
+            ("none", ()),
+            register_post=register_post,
         )
+        # A 200 body is the response, not an exception. Put the secret in an error instead.
+        report["error"] = "refused " + secret + " nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+        report["response"] = None
         text = public.format_registration(report, secret_hex=secret)
         self.assertNotIn(secret, text)
         self.assertNotIn("nsec1qqq", text)
         self.assertIn("[redacted]", text)
-        self.assertEqual(report["results"][0]["status"], "rejected")
 
 
 class AgentSurfaceTests(KeyedTestCase):
@@ -453,12 +479,13 @@ class AgentSurfaceTests(KeyedTestCase):
     def test_prompt_and_status_show_the_cache(self):
         public.cache_public(
             [{"slug": "grokbot", "topic": "Grok Bot", "public": True}],
+            source="GET /api/public/collections",
             fetched_at="2026-11-11T00:00:00Z",
         )
         text = gates.prompt_context(gates.read_settings(Ctx(mode="reader", collection="pump")))
         self.assertIn("public collections: grokbot", text)
-        self.assertIn("paranoy_list_public_collections", text)
-        self.assertIn("register_public_collections: all", text)
+        self.assertIn("4715", text)
+        self.assertIn("immediate", text)
         self.assertNotIn("nsec1", text)
         service = FakeService(plugin)
         service.responses["list_collections"] = {"result": []}
@@ -469,10 +496,12 @@ class AgentSurfaceTests(KeyedTestCase):
         local = gates.status_text(gates.read_settings(Ctx(register_public_collections="none")))
         self.assertIn("register_public_collections: none", local)
         self.assertIn("public_collections: grokbot", local)
-        self.assertNotIn("nsec1", local)
 
-    def test_pinning_a_public_collection_says_membership_is_still_required(self):
-        public.cache_public([{"slug": "grokbot", "public": True}])
+    def test_pinning_a_public_collection_names_kind_4715(self):
+        public.cache_public(
+            [{"slug": "grokbot", "public": True}],
+            source="GET /api/public/collections",
+        )
         ctx = Ctx(mode="reader", collection="pump")
         service = FakeService(plugin)
         service.responses["list_collections"] = {
@@ -482,7 +511,8 @@ class AgentSurfaceTests(KeyedTestCase):
             service, gates.read_settings(ctx), {"slug": "grokbot"}, ctx.set_config
         )
         self.assertIn("not a member of grokbot", result["error"])
-        self.assertIn("public collection", result["error"])
+        self.assertIn("4715", result["error"])
+        self.assertNotIn("accepts this key", result["error"])
         self.assertEqual(ctx.settings.get("collection"), "pump")
 
     def test_cli_exposes_the_collections_flag(self):
@@ -500,7 +530,3 @@ class AgentSurfaceTests(KeyedTestCase):
         self.assertEqual(register.collections, "none")
         self.assertIn("terminal", gates.slash_result(Ctx(), "register"))
         self.assertIn("--collections", gates.slash_result(Ctx(), "keygen"))
-
-
-if __name__ == "__main__":
-    unittest.main()

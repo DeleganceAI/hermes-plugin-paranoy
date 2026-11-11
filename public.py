@@ -1,38 +1,34 @@
-"""Public collections: the catalog the server already publishes, and key registration.
+"""Public collections and kind 4715 registration.
 
-Discovery uses the unsigned catalog the Communities page already reads:
+Catalog, no signature, in this order:
 
-    GET {server_url}/showcase.json
-    {"collections": [{"slug", "topic", "created_at", "evidence", "claims",
-                      "links", "contradictions", "last_at", "contributors", ...}]}
+1. ``GET {server_url}/api/public/collections``
+   ``{"collections": [{"slug", "topic", "evidence", "claims", "links", "contradictions"}]}``
+2. MCP tool ``list_public_collections``, when a signed client is available.
+3. ``GET {server_url}/showcase.json`` only when the newer catalog is missing.
 
-``shape`` and ``daily`` are display data and are not cached. Every row in that
-catalog is a public collection. Its records and member list stay private until
-this key is a member. Reading and contributing use the existing collection
-tools, and only succeed once membership is real.
+Registration is one signed kind 4715 event. Its content is one of:
 
-Registration is isolated in ``register_key``. The live MCP tool list has no
-self-join tool, and kind 4705 is signed by an owner or admin, so this module
-does not publish a members event. ``register_key`` sends one signed kind 4707
-request whose tool name is ``register_key``. The server has to provide that
-tool. It should record the same join request as ``POST /api/c/<slug>/join``
-on the Communities page: the owner or an admin accepts it by signing a new
-kind 4705 list. A repeat call for a key that is already a member, or that
-already has a request waiting, must succeed.
+- ``{"all": true}`` — member of every collection that is public when the server accepts it
+- ``{"collections": ["<slug>", ...]}`` — those public slugs, at most 100
+- ``{"collections": []}`` — opt out and clear the set
 
-Expected ``structuredContent``:
+The plugin POSTs ``{"event": <signed event>}`` to
+``{server_url}/api/public/register``. If that route is missing, it publishes
+the same event through MCP ``publish``. A newer event replaces the whole set.
+The server answers ``{ok, pubkey, npub, role, collections, accepted, skipped}``.
+``role`` is ``member``. Membership is immediate. ``skipped`` names collections
+an owner or admin blocked. Reads and writes still need a kind 4706 terms
+signature. The key cannot create a collection until it has signed up.
 
-    {"collection": "<slug>", "status": "registered"|"already"|"pending", "detail": "<optional>"}
-
-``registered`` means the key is a member now. ``already`` means it was already
-a member or already requested. ``pending`` means the request is waiting for
-an owner or admin. The plugin also classifies error text, so a server that
-rejects with "approval required" or "already a member" is reported and does
-not abort the rest of keygen.
+Limits the server enforces: 30 registration posts per address per hour, and
+10 stored events per key per hour. A limit or a rejected event does not
+discard the key.
 """
 
 from __future__ import annotations
 
+import json
 import re
 
 import httpx
@@ -42,53 +38,37 @@ from .client import PluginError, redact
 from .runtime import now_iso
 
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-_PUBKEY = re.compile(r"^[0-9a-fA-F]{64}$")
-REGISTER_TOOL = "register_key"
-CATALOG_PATH = "/showcase.json"
-CATALOG_SOURCE = "GET /showcase.json"
-
-_ALREADY = re.compile(
-    r"already (?:a )?member|already requested|already pending|already registered|duplicate",
-    re.IGNORECASE,
-)
-_PENDING = re.compile(
-    r"requires approval|approval required|pending|awaiting|owner must|needs approval",
-    re.IGNORECASE,
-)
-_UNAVAILABLE = re.compile(
-    r"unknown tool|tool not found|no such tool|not implemented|method not found|unknown mcp",
-    re.IGNORECASE,
-)
-_STATUSES = frozenset({"registered", "already", "pending", "rejected", "offline", "unavailable", "skipped"})
-_SUCCESS_ALIASES = {
-    "ok": "registered",
-    "member": "registered",
-    "joined": "registered",
-    "created": "registered",
-    "duplicate": "already",
-    "exists": "already",
-    "approval": "pending",
-    "approval_required": "pending",
-    "requested": "pending",
-    "waiting": "pending",
-}
+KIND_PUBLIC_MEMBERSHIP = 4715
+CATALOG_PATH = "/api/public/collections"
+CATALOG_SOURCE = "GET /api/public/collections"
+FALLBACK_PATH = "/showcase.json"
+FALLBACK_SOURCE = "GET /showcase.json"
+MCP_CATALOG_TOOL = "list_public_collections"
+MCP_CATALOG_SOURCE = "MCP list_public_collections"
+REGISTER_PATH = "/api/public/register"
+REGISTER_SOURCE = "POST /api/public/register"
+MAX_NAMED_COLLECTIONS = 100
 
 _GETTER = None
-_POSTER = None
+_REGISTER_POST = None
 
 
-def use_transport(*, getter=None, poster=None) -> None:
-    """Tests replace the catalog GET and the MCP POST. None restores both."""
-    global _GETTER, _POSTER
+class _MissingEndpoint(PluginError):
+    """The route is not on this server. Another catalog or publish path may exist."""
+
+
+def use_transport(*, getter=None, register_post=None) -> None:
+    """Tests replace the catalog GET and the register POST. None restores both."""
+    global _GETTER, _REGISTER_POST
     _GETTER = getter
-    _POSTER = poster
+    _REGISTER_POST = register_post
 
 
-def showcase_url(server_url: str) -> str:
+def origin(server_url: str) -> str:
     base = str(server_url or "").strip().rstrip("/")
     if not (base.startswith("https://") or base.startswith("http://")):
         raise PluginError("server_url must be an http or https origin.")
-    return base + CATALOG_PATH
+    return base
 
 
 def parse_collection_choice(value) -> tuple[str, tuple[str, ...]]:
@@ -119,6 +99,11 @@ def parse_collection_choice(value) -> tuple[str, tuple[str, ...]]:
             slugs.append(slug)
     if not slugs:
         return ("all", ())
+    if len(slugs) > MAX_NAMED_COLLECTIONS:
+        raise PluginError(
+            f"At most {MAX_NAMED_COLLECTIONS} public collections can be named. "
+            "Use all, or a shorter list."
+        )
     return ("slugs", tuple(slugs))
 
 
@@ -128,7 +113,24 @@ def resolve_choice(cli_value, config_value) -> tuple[str, tuple[str, ...]]:
     return parse_collection_choice(raw)
 
 
+def registration_content(choice: tuple[str, tuple[str, ...]]) -> dict:
+    """Kind 4715 content for all, a slug list, or an empty opt-out."""
+    mode, slugs = choice
+    if mode == "all":
+        return {"all": True}
+    if mode == "none":
+        return {"collections": []}
+    if len(slugs) > MAX_NAMED_COLLECTIONS:
+        raise PluginError(
+            f"At most {MAX_NAMED_COLLECTIONS} public collections can be named. "
+            "Use all, or a shorter list."
+        )
+    return {"collections": list(slugs)}
+
+
 def normalize_public_rows(body) -> list[dict]:
+    if isinstance(body, dict) and "collections" not in body and isinstance(body.get("result"), list):
+        body = {"collections": body["result"]}
     if not isinstance(body, dict) or not isinstance(body.get("collections"), list):
         raise PluginError("The Paranoy server returned an unreadable response.")
     rows: list[dict] = []
@@ -144,11 +146,7 @@ def normalize_public_rows(body) -> list[dict]:
         topic = item.get("topic")
         if isinstance(topic, str) and topic.strip():
             row["topic"] = topic.strip()
-        for key in ("created_at", "last_at"):
-            value = item.get(key)
-            if isinstance(value, str) and value.strip():
-                row[key] = value.strip()
-        for key in ("evidence", "claims", "links", "contradictions", "contributors"):
+        for key in ("evidence", "claims", "links", "contradictions"):
             value = item.get(key)
             if isinstance(value, bool):
                 continue
@@ -160,7 +158,7 @@ def normalize_public_rows(body) -> list[dict]:
     return rows
 
 
-def _get_json(url: str):
+def _http_get_json(url: str):
     getter = _GETTER
     if getter is not None:
         return getter(url)
@@ -175,10 +173,10 @@ def _get_json(url: str):
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code if exc.response is not None else 0
         if status == 404:
-            raise PluginError(
-                "The Paranoy server has no public collection catalog at /showcase.json."
-            ) from exc
+            raise _MissingEndpoint(f"The Paranoy server has no {url}.") from exc
         raise PluginError("Could not reach the Paranoy server.") from exc
+    except _MissingEndpoint:
+        raise
     except PluginError:
         raise
     except Exception as exc:
@@ -189,19 +187,46 @@ def _get_json(url: str):
         raise PluginError("The Paranoy server returned an unreadable response.") from exc
 
 
-def fetch_public_collections(server_url: str, *, getter=None) -> list[dict]:
-    """GET the public catalog. No signature and no key."""
-    url = showcase_url(server_url)
+def fetch_public_collections(server_url: str, *, getter=None, client=None) -> tuple[list[dict], str]:
+    """Return ``(rows, source)``. No key is required for the HTTP catalog.
+
+    A missing route is the only reason to try the next source. Any other
+    failure stops there, so an offline server is not hidden behind an older catalog.
+    """
+    base = origin(server_url)
+    missing = None
+    try:
+        body = _read_catalog(base + CATALOG_PATH, getter)
+        return normalize_public_rows(body), CATALOG_SOURCE
+    except _MissingEndpoint as exc:
+        missing = exc
+    if client is not None:
+        try:
+            body = client.call(MCP_CATALOG_TOOL, {})
+            return normalize_public_rows(body), MCP_CATALOG_SOURCE
+        except PluginError:
+            pass
+    try:
+        body = _read_catalog(base + FALLBACK_PATH, getter)
+        return normalize_public_rows(body), FALLBACK_SOURCE
+    except _MissingEndpoint:
+        pass
+    except PluginError:
+        raise
+    if missing is not None:
+        raise missing
+    raise PluginError("Could not reach the Paranoy server.")
+
+
+def _read_catalog(url: str, getter):
     if getter is not None:
-        body = getter(url)
-    else:
-        body = _get_json(url)
-    return normalize_public_rows(body)
+        return getter(url)
+    return _http_get_json(url)
 
 
-def cache_public(rows: list[dict], *, fetched_at: str | None = None) -> dict:
+def cache_public(rows: list[dict], *, source: str, fetched_at: str | None = None) -> dict:
     snapshot = {
-        "source": CATALOG_SOURCE,
+        "source": source,
         "fetched_at": fetched_at or now_iso(),
         "collections": rows,
     }
@@ -239,82 +264,11 @@ def membership_hint(slug: str) -> str:
     if not is_cached_public(slug):
         return ""
     return (
-        "It is a public collection. Its records stay private until an owner or admin "
-        "accepts this key. Keygen registers with public collections by default, and "
-        "`hermes paranoy register` retries that without replacing the key."
+        "It is a public collection. Kind 4715 makes this key a member immediately, "
+        "unless an owner or admin blocked that collection. "
+        "Reads and writes still need the current terms. "
+        "`hermes paranoy register` sends that event again without replacing the key."
     )
-
-
-def _check_pubkey(pubkey: str) -> str:
-    text = str(pubkey or "").strip().lower()
-    if not _PUBKEY.fullmatch(text):
-        raise PluginError("register_key needs the 64-character hex public key.")
-    return text
-
-
-def _detail(result: dict) -> str:
-    for key in ("detail", "message"):
-        value = result.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
-
-
-def classify_success(collection_id: str, result) -> dict:
-    """A non-error MCP result. Unknown shapes still count as registered."""
-    body = result if isinstance(result, dict) else {}
-    raw_status = str(body.get("status") or "").strip().lower()
-    status = _SUCCESS_ALIASES.get(raw_status, raw_status)
-    if status not in _STATUSES:
-        if body.get("pending") or body.get("approval_required"):
-            status = "pending"
-        elif body.get("already"):
-            status = "already"
-        else:
-            status = "registered"
-    row = {"collection": collection_id, "status": status}
-    detail = _detail(body)
-    if detail:
-        row["detail"] = detail
-    return row
-
-
-def classify_error(collection_id: str, exc: PluginError) -> dict:
-    text = str(exc)
-    lowered = text.lower()
-    if "could not reach" in lowered or "no public collection catalog" in lowered:
-        status = "offline"
-    elif _UNAVAILABLE.search(text):
-        status = "unavailable"
-    elif _ALREADY.search(text):
-        status = "already"
-    elif _PENDING.search(text):
-        status = "pending"
-    else:
-        status = "rejected"
-    return {"collection": collection_id, "status": status, "detail": text}
-
-
-def register_key(collection_id: str, pubkey: str, *, client) -> dict:
-    """Register one public key with one public collection.
-
-    ``collection_id`` is the collection slug. ``pubkey`` is the hex public
-    key and must be the key that signs the request. The private key is not
-    an argument and is not sent.
-
-    Server contract: MCP ``tools/call`` name ``register_key`` at
-    ``{server_url}/mcp``, with a signed kind 4707 request whose content is
-    ``{"tool": "register_key", "args": {"collection": "<slug>", "pubkey": "<hex>"}, "nonce": "..."}``.
-    See the module docstring for the result this function expects.
-    """
-    from .commands import check_slug
-
-    slug = check_slug(collection_id)
-    pubkey = _check_pubkey(pubkey)
-    if pubkey != str(getattr(client, "pubkey", "") or "").lower():
-        raise PluginError("register_key only registers the key that signs the request.")
-    result = client.call(REGISTER_TOOL, {"collection": slug, "pubkey": pubkey})
-    return classify_success(slug, result)
 
 
 def _member_slugs(service) -> set[str] | None:
@@ -334,8 +288,8 @@ def _member_slugs(service) -> set[str] | None:
 def list_for_agent(service, settings: dict) -> dict:
     """Fetch the catalog, cache it, and mark collections this key is in."""
     try:
-        rows = fetch_public_collections(settings.get("server_url") or "")
-        snapshot = cache_public(rows)
+        rows, source = fetch_public_collections(settings.get("server_url") or "", client=service)
+        snapshot = cache_public(rows, source=source)
         warning = None
     except PluginError as exc:
         snapshot = cached_snapshot()
@@ -356,9 +310,9 @@ def list_for_agent(service, settings: dict) -> dict:
         "fetched_at": snapshot.get("fetched_at"),
         "collections": collections,
         "note": (
-            "These are public collections. Records stay private until this key is a member. "
-            "Pass collection to read, and to write when the mode and role allow it, only where "
-            "member is true."
+            "These are public collections. Kind 4715 membership is immediate, except collections "
+            "an owner or admin blocked. Reads and writes still need the current terms (kind 4706). "
+            "Pass collection once member is true."
         ),
     }
     if warning:
@@ -367,47 +321,60 @@ def list_for_agent(service, settings: dict) -> dict:
     return payload
 
 
-def register_selection(client, choice: tuple[str, tuple[str, ...]], rows: list[dict]) -> list[dict]:
-    """Register with each selected public collection. One failure does not stop the next."""
-    mode, slugs = choice
-    if mode == "none":
-        return []
-    by_slug = {row["slug"]: row for row in rows if row.get("slug")}
-    targets = list(by_slug) if mode == "all" else list(slugs)
-    results: list[dict] = []
-    offline = False
-    for slug in targets:
-        if slug not in by_slug:
-            results.append(
-                {
-                    "collection": slug,
-                    "status": "skipped",
-                    "detail": "Not in the public collection catalog.",
-                }
-            )
-            continue
-        if offline:
-            results.append(
-                {
-                    "collection": slug,
-                    "status": "offline",
-                    "detail": "Could not reach the Paranoy server.",
-                }
-            )
-            continue
-        try:
-            results.append(register_key(slug, client.pubkey, client=client))
-        except PluginError as exc:
-            row = classify_error(slug, exc)
-            results.append(row)
-            if row["status"] == "offline":
-                offline = True
-        except Exception:
-            results.append({"collection": slug, "status": "rejected", "detail": "Registration failed."})
-    return results
+def _known_public_slugs(server_url: str, *, getter=None, client=None) -> tuple[set[str] | None, str | None]:
+    try:
+        rows, source = fetch_public_collections(server_url, getter=getter, client=client)
+        cache_public(rows, source=source)
+        return {row["slug"] for row in rows}, None
+    except PluginError as exc:
+        return None, str(exc)
 
 
-def register_stored(server_url: str, secret_hex: str, choice, *, poster=None, getter=None) -> dict:
+def _post_register(server_url: str, event: dict, register_post) -> dict:
+    url = origin(server_url) + REGISTER_PATH
+    body = {"event": event}
+    poster = register_post if register_post is not None else _REGISTER_POST
+    if poster is not None:
+        return poster(url, body)
+    try:
+        response = httpx.post(
+            url,
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            json=body,
+            timeout=60.0,
+        )
+    except Exception as exc:
+        raise PluginError("Could not reach the Paranoy server.") from exc
+    if response.status_code == 404:
+        raise _MissingEndpoint("The Paranoy server has no /api/public/register.")
+    try:
+        payload = response.json()
+    except Exception as exc:
+        raise PluginError("The Paranoy server returned an unreadable response.") from exc
+    if response.status_code >= 400:
+        message = payload.get("error") if isinstance(payload, dict) else None
+        if not message and isinstance(payload, dict):
+            message = payload.get("message")
+        raise PluginError(str(message or "The Paranoy server rejected the registration."))
+    if not isinstance(payload, dict):
+        raise PluginError("The Paranoy server returned an unreadable response.")
+    return payload
+
+
+def register_public_membership(client, choice, *, server_url: str, register_post=None) -> dict:
+    """Sign one kind 4715 and send it. The private key is not in the event."""
+    content = registration_content(choice)
+    event = client.sign(KIND_PUBLIC_MEMBERSHIP, content)
+    try:
+        body = _post_register(server_url, event, register_post)
+        return {"via": REGISTER_SOURCE, "event": event, "response": body}
+    except _MissingEndpoint:
+        published = client.publish([event])
+        response = dict(published) if isinstance(published, dict) else {"result": published}
+        return {"via": "MCP publish", "event": event, "response": response}
+
+
+def register_stored(server_url: str, secret_hex: str, choice, *, getter=None, register_post=None, mcp_poster=None) -> dict:
     """Register an already-stored key. Never raises. The secret is not copied into the result."""
     from .client import ParanoyClient
 
@@ -415,32 +382,57 @@ def register_stored(server_url: str, secret_hex: str, choice, *, poster=None, ge
     report = {
         "choice": mode,
         "requested": list(slugs),
-        "discovered": None,
-        "discovery_error": None,
-        "results": [],
+        "content": None,
+        "omitted": [],
+        "catalog_error": None,
+        "error": None,
+        "via": None,
+        "response": None,
     }
-    if mode == "none":
-        return report
     try:
-        rows = fetch_public_collections(server_url, getter=getter)
-        cache_public(rows)
+        if mode == "slugs" and len(slugs) > MAX_NAMED_COLLECTIONS:
+            raise PluginError(
+                f"At most {MAX_NAMED_COLLECTIONS} public collections can be named."
+            )
+        client = ParanoyClient(server_url, secret_hex, poster=mcp_poster)
     except PluginError as exc:
-        report["discovery_error"] = str(exc)
+        report["error"] = str(exc)
+        return report
+    content = registration_content(choice)
+    if mode == "slugs":
+        known, catalog_error = _known_public_slugs(server_url, getter=getter, client=client)
+        report["catalog_error"] = catalog_error
+        if known is not None:
+            report["omitted"] = [slug for slug in slugs if slug not in known]
+            kept = [slug for slug in slugs if slug in known]
+            if not kept:
+                report["error"] = (
+                    "None of those slugs are in the public catalog, so no kind 4715 event was sent. "
+                    "An empty list would clear registration."
+                )
+                return report
+            content = {"collections": kept}
+            choice = ("slugs", tuple(kept))
+    elif mode == "all":
+        _, catalog_error = _known_public_slugs(server_url, getter=getter, client=client)
+        report["catalog_error"] = catalog_error
+    report["content"] = content
+    try:
+        sent = register_public_membership(client, choice, server_url=server_url, register_post=register_post)
+    except PluginError as exc:
+        report["error"] = str(exc)
         return report
     except Exception:
-        report["discovery_error"] = "Could not reach the Paranoy server."
+        report["error"] = "Registration failed."
         return report
-    report["discovered"] = len(rows)
-    try:
-        client = ParanoyClient(server_url, secret_hex, poster=poster if poster is not None else _POSTER)
-    except PluginError as exc:
-        report["discovery_error"] = str(exc)
-        return report
-    report["results"] = register_selection(client, choice, rows)
+    report["via"] = sent["via"]
+    report["response"] = sent["response"]
+    report["event_kind"] = sent["event"].get("kind")
+    report["signed_content"] = json.loads(sent["event"]["content"])
     return report
 
 
-def run_keygen(save, server_url: str, choice, *, poster=None, getter=None) -> str:
+def run_keygen(save, server_url: str, choice, *, getter=None, register_post=None, mcp_poster=None) -> str:
     """Generate a key, store it, then register. Registration cannot discard the key."""
     import secrets
 
@@ -457,60 +449,94 @@ def run_keygen(save, server_url: str, choice, *, poster=None, getter=None) -> st
         server_url,
         secret_hex,
         choice,
-        poster=poster,
         getter=getter,
+        register_post=register_post,
+        mcp_poster=mcp_poster,
     )
     return format_keygen_summary(signer.npub, report, secret_hex)
 
 
-def keygen_from_settings(save, *, server_url: str, cli_value, config_value, poster=None, getter=None) -> str:
+def keygen_from_settings(
+    save, *, server_url: str, cli_value, config_value, getter=None, register_post=None, mcp_poster=None
+) -> str:
     """Resolve the flag and config, then generate. An invalid choice raises before any key exists."""
     choice = resolve_choice(cli_value, config_value)
-    return run_keygen(save, server_url, choice, poster=poster, getter=getter)
+    return run_keygen(
+        save,
+        server_url,
+        choice,
+        getter=getter,
+        register_post=register_post,
+        mcp_poster=mcp_poster,
+    )
 
 
 def _safe(text: str, secret_hex: str | None) -> str:
     return redact(text, secret_hex)
 
 
+def _listed(value) -> str:
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if isinstance(item, dict) and item.get("slug"):
+                topic = item.get("topic")
+                parts.append(f"{item['slug']}" + (f" ({topic})" if topic else ""))
+            else:
+                parts.append(str(item))
+        return ", ".join(parts) if parts else "(none)"
+    if value in (None, ""):
+        return "(none)"
+    return str(value)
+
+
 def format_registration(report: dict, *, secret_hex: str | None = None) -> str:
     mode = report.get("choice") or "all"
-    if mode == "none":
-        return "Public registration: skipped (none)."
-    lines: list[str] = []
-    if report.get("discovery_error"):
+    lines = [f"Public registration ({mode}), kind {KIND_PUBLIC_MEMBERSHIP}."]
+    if report.get("omitted"):
+        lines.append("Not in the public catalog, left out: " + ", ".join(report["omitted"]) + ".")
+    if report.get("catalog_error") and mode == "all":
         lines.append(
-            "Public registration: could not list public collections ("
-            + _safe(str(report["discovery_error"]), secret_hex)
-            + "). The key was kept. Retry with: hermes paranoy register"
+            "The catalog could not be cached ("
+            + _safe(str(report["catalog_error"]), secret_hex)
+            + "). all still means every collection that is public when the server accepts the event."
         )
-        return "\n".join(lines)
-    results = report.get("results") or []
-    if mode == "all":
-        lines.append(f"Public registration (all, {len(results)} collections):")
-    else:
-        requested = ", ".join(report.get("requested") or []) or "(none)"
-        lines.append(f"Public registration ({requested}):")
-    if not results:
-        lines.append("  No public collections are listed.")
-        return "\n".join(lines)
-    counts = {"registered": 0, "already": 0, "pending": 0, "failed": 0}
-    for row in results:
-        status = str(row.get("status") or "rejected")
-        if status in {"registered", "already", "pending"}:
-            counts[status] += 1
-        else:
-            counts["failed"] += 1
-        detail = _safe(str(row.get("detail") or ""), secret_hex)
-        suffix = f" — {detail}" if detail else ""
-        lines.append(f"  {row.get('collection')}: {status}{suffix}")
-    lines.append(
-        f"{counts['registered']} registered, {counts['already']} already registered, "
-        f"{counts['pending']} waiting for approval, {counts['failed']} not registered."
-    )
-    if counts["failed"]:
+    if report.get("error"):
+        text = _safe(str(report["error"]), secret_hex)
+        if _rate_limited(text):
+            text += (
+                " The server allows 30 registration posts per address per hour "
+                "and 10 stored events per key per hour."
+            )
+        lines.append(text)
         lines.append("The key was kept. Retry with: hermes paranoy register")
-    return "\n".join(lines)
+        return "\n".join(lines)
+    content = report.get("signed_content") or report.get("content") or {}
+    lines.append("Sent: " + json.dumps(content, separators=(",", ":"), ensure_ascii=False))
+    if report.get("via"):
+        lines.append("Via: " + str(report["via"]))
+    response = report.get("response") if isinstance(report.get("response"), dict) else {}
+    if "ok" in response:
+        lines.append("ok: " + str(response.get("ok")))
+    if response.get("role"):
+        lines.append("role: " + str(response.get("role")))
+    if "collections" in response:
+        lines.append("Member of: " + _listed(response.get("collections")))
+    if response.get("skipped"):
+        lines.append("Skipped, blocked by an owner or admin: " + _listed(response.get("skipped")))
+    if response.get("accepted"):
+        lines.append("accepted: " + _listed(response.get("accepted")))
+    lines.append(
+        "Membership is immediate, except a collection listed under skipped. "
+        "Reads and writes still need the current terms (kind 4706), signed on the first allowed write. "
+        "This key cannot create a collection until it has signed up."
+    )
+    return "\n".join(_safe(line, secret_hex) for line in lines)
+
+
+def _rate_limited(text: str) -> bool:
+    lowered = text.lower()
+    return "429" in lowered or "rate" in lowered or "too many" in lowered or "per hour" in lowered
 
 
 def format_keygen_summary(npub: str, report: dict, secret_hex: str | None = None) -> str:
@@ -528,7 +554,7 @@ def format_keygen_summary(npub: str, report: dict, secret_hex: str | None = None
 def format_public_list(payload: dict) -> str:
     rows = payload.get("collections") or []
     fetched = payload.get("fetched_at") or "unknown time"
-    lines = [f"Public collections ({len(rows)}), fetched {fetched}."]
+    lines = [f"Public collections ({len(rows)}), fetched {fetched} from {payload.get('source') or CATALOG_SOURCE}."]
     if not rows:
         lines.append("Nothing public yet.")
     for row in rows:
@@ -544,8 +570,8 @@ def format_public_list(payload: dict) -> str:
     if payload.get("warning"):
         lines.append("Catalog refresh failed: " + str(payload["warning"]))
     lines.append(
-        "Records stay private until this key is a member. "
-        "Pass collection on a read or write once it is."
+        "Kind 4715 membership is immediate unless an owner or admin blocked the collection. "
+        "Reads and writes still need the current terms. Pass collection once member is true."
     )
     return "\n".join(lines)
 
@@ -555,7 +581,8 @@ def prompt_public_line() -> str:
     if not rows:
         return (
             "public collections: (not loaded). Call paranoy_list_public_collections. "
-            "Pass collection to read or contribute once this key is a member."
+            "Kind 4715 membership is immediate except for a blocked collection. "
+            "Reads and writes still need the current terms."
         )
     slugs = [str(row.get("slug")) for row in rows if row.get("slug")]
     shown = ", ".join(slugs[:12])
@@ -564,5 +591,7 @@ def prompt_public_line() -> str:
     return (
         f"public collections: {shown}. "
         "Call paranoy_list_public_collections for topics. "
-        "Pass collection to read or contribute once this key is a member."
+        "Kind 4715 membership is immediate except for a blocked collection. "
+        "Pass collection to read or contribute once this key is a member. "
+        "Reads and writes still need the current terms."
     )

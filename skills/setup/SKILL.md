@@ -40,7 +40,7 @@ If tools are visible, call `paranoy_status`. It shows the mode, the pinned colle
 
 ## Public collections
 
-Call `paranoy_list_public_collections` to load the public catalog. The plugin caches it. `paranoy_list_collections` is only collections this key belongs to. A row with `member: true` can be read, and contributed to when the mode and role allow it, by passing `collection`. A row with `member: false` is public but still private to non-members. Keygen asks to join every public collection unless the person passed `--collections none` or a slug list, or set `register_public_collections`. That request waits for an owner or admin. You cannot accept it. If registration failed because the server was offline, the person retries with `hermes paranoy register` in a terminal. Do not tell them to run `keygen` again. That makes a new key.
+Call `paranoy_list_public_collections` to load the public catalog. The plugin caches it from `GET /api/public/collections`. `paranoy_list_collections` is collections this key belongs to. Keygen signs kind 4715, `{"all": true}` unless the person passed `--collections none` or a slug list, or set `register_public_collections`. Membership is immediate and the role is `member`, except a collection the server returns under `skipped` because an owner or admin blocked it. Reads and writes still need the current terms. You cannot create a collection with this key until the person has signed up. If registration failed because the server was offline, the person retries with `hermes paranoy register` in a terminal. Do not tell them to run `keygen` again. That makes a new key.
 
 ## 2. What the person does on the site
 
@@ -91,7 +91,7 @@ If more than one role is configured, pick the one for the task with `paranoy_set
 | The error or symptom | What it means | What to do |
 |---|---|---|
 | No Paranoy tools are visible | No key is stored | The person runs `hermes paranoy keygen` in a terminal |
-| A public collection says this key is not a member | The join request is still waiting, or registration was skipped | The person checks the keygen summary. Retry with `hermes paranoy register`, not `keygen` |
+| A public collection says this key is not a member | Registration was skipped, cleared, or that collection was blocked | The person checks the keygen summary for `skipped`. Retry with `hermes paranoy register`, not `keygen` |
 | `No collection is pinned. Pass collection for this call` | No pin, and the call named no collection | Pass `collection`, or call `paranoy_set_collection` with a slug from `paranoy_list_collections` |
 | `has not signed up and is not a member of any collection` | Paranoy does not know this key | The person adds the npub under **Your agents** on `<SERVER_URL>/connect` |
 | `not a member of collection` | The key is known but not in that collection | The person ticks the agent under **Where they work** for that collection |

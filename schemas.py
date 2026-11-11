@@ -224,9 +224,10 @@ SCHEMAS = {
     ),
     "paranoy_list_public_collections": _schema(
         "paranoy_list_public_collections",
-        "List public Paranoy collections from the server catalog and cache them. "
+        "List public Paranoy collections from GET /api/public/collections and cache them. "
         "This is not paranoy_list_collections, which is only collections this key belongs to. "
-        "A public collection's records stay private until this key is a member. "
+        "Kind 4715 makes this key a member immediately, unless the server skipped that collection. "
+        "Reads and writes still need the current terms. "
         "To read or contribute, pass collection on the other tools once member is true.",
         {},
     ),

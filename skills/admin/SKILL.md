@@ -37,7 +37,7 @@ Administer collections. Do not add evidence, claims, links, or contradictions. C
 ## What you may change
 
 - **Members (kind 4705).** `paranoy_add_members` and `paranoy_remove_members` name who to add or remove. The plugin fetches the roster, previews the change, and publishes the complete list. Do not hand it a replacement list. The owner cannot be removed. Wiping everyone except the owner needs `confirm_owner_only`.
-- **Topic and visibility (kind 4709).** `paranoy_set_topic` sets the one-line topic (at most 140 characters) and whether the collection is public. A public collection is listed in the server catalog that `paranoy_list_public_collections` reads. Making it public does not by itself add members.
+- **Topic and visibility (kind 4709).** `paranoy_set_topic` sets the one-line topic (at most 140 characters) and whether the collection is public. A public collection is listed at `GET /api/public/collections`, which `paranoy_list_public_collections` reads. A key becomes a member by signing kind 4715, not by this flag alone. An owner or admin can still block that key; the server then skips the collection.
 - **Admins (kind 4710), and only when this key is the owner.** `paranoy_set_admins` adds or removes admins. The plugin fetches the current list and leaves the owner's pubkey out. An admin cannot change the admin list.
 - **Create a collection.** `paranoy_create_collection` opens a collection this key owns. Pass `owner` only when this key is already a steward and the new collection should belong to that grantor (kind 4712).
 

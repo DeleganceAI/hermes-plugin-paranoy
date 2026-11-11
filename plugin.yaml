@@ -6,8 +6,9 @@ description: >
   Native Hermes plugin for a Paranoy evidence ledger. The agent key stays in
   Hermes as PARANOY_BOT_SECRET_HEX; the model never holds it. Reads and
   allowed writes are signed in-process and sent to server_url/mcp over
-  HTTPS. Public collections are read from server_url/showcase.json and
-  cached. Keygen registers the new key with them by default. fetch_url asks
+  HTTPS. Public collections are read from server_url/api/public/collections
+  and cached. Keygen signs a kind 4715 event that registers the new key with
+  them by default. fetch_url asks
   that server to fetch public http(s) documents.
   Rejects, the Ponder journal, role checkpoints, and overview.md are written
   under the Hermes plugin data directory.
@@ -136,10 +137,11 @@ config_schema:
     label: Register with public collections
     description: >
       Which public collections keygen and hermes paranoy register sign this
-      key up for. "all" (default) is every public collection. "none" skips
-      registration. A comma-separated slug list registers only those. The
-      --collections flag overrides this for one run. Registration is a join
-      request. It does not print the secret, and a failure does not discard
+      key up for. "all" (default) sends kind 4715 {"all": true}. "none" sends
+      {"collections": []} and clears the set. A comma-separated slug list sends
+      those public slugs, at most 100. The --collections flag overrides this
+      for one run. Membership is immediate unless an owner or admin blocked a
+      collection. It does not print the secret, and a failure does not discard
       the key.
   auto_sign_terms:
     type: bool
