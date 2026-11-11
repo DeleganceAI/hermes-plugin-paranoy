@@ -17,6 +17,7 @@ See ``CAPTURE.md`` in the task artifacts for the settled design.
 
 from __future__ import annotations
 
+import contextvars
 import copy
 import hashlib
 import json
@@ -714,9 +715,12 @@ def run_inbound(payload: dict, ctx, settings_factory, service_factory) -> None:
 
 
 def start_inbound_thread(payload: dict, ctx, settings_factory, service_factory) -> None:
+    # Hermes binds the profile secret scope in a contextvar; a bare Thread starts with an
+    # empty context, so get_secret raises under the multiplexing gateway. Carry it over.
+    context = contextvars.copy_context()
     thread = threading.Thread(
-        target=run_inbound,
-        args=(payload, ctx, settings_factory, service_factory),
+        target=context.run,
+        args=(run_inbound, payload, ctx, settings_factory, service_factory),
         daemon=True,
         name="paranoy-capture",
     )
