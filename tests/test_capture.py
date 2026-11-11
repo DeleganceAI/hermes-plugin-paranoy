@@ -616,3 +616,23 @@ class CaptureTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InboundThreadContextTest(unittest.TestCase):
+    def test_thread_sees_callers_contextvars(self):
+        import contextvars
+
+        scope = contextvars.ContextVar("scope", default=None)
+        seen = []
+        original = capture.run_inbound
+        capture.run_inbound = lambda *args: seen.append(scope.get())
+        try:
+            token = scope.set("profile-secrets")
+            capture.start_inbound_thread({}, None, None, None)
+            scope.reset(token)
+            for thread in __import__("threading").enumerate():
+                if thread.name == "paranoy-capture":
+                    thread.join(timeout=5)
+        finally:
+            capture.run_inbound = original
+        self.assertEqual(seen, ["profile-secrets"])
