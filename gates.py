@@ -227,10 +227,19 @@ def args_look_sensitive(args: dict) -> bool:
 
 def in_unattended_cron(ctx) -> bool:
     current = getattr(ctx, "current_cron_execution", None)
-    if not callable(current):
-        return False
+    if callable(current):
+        try:
+            if current() is not None:
+                return True
+        except Exception:
+            pass
+    # Hermes marks scheduler sessions with this env var "so the approval
+    # system can apply cron_mode" (cron/scheduler.py). Hermes versions without
+    # ctx.current_cron_execution rely on it entirely.
+    import os
+
     try:
-        return current() is not None
+        return os.environ.get("HERMES_CRON_SESSION") == "1"
     except Exception:
         return False
 

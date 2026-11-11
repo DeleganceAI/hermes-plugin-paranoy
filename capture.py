@@ -514,6 +514,15 @@ def terminal_payload(kwargs, ctx, settings_factory) -> dict | None:
         session_id = str(kwargs.get("session_id") or "")
         if session_id and session_id in _SUBAGENT_SESSIONS:
             return None
+        # Kanban workers run as separate `hermes chat -q` subprocesses whose
+        # user message is a task description, not human speech.
+        import os
+
+        try:
+            if os.environ.get("HERMES_KANBAN_TASK"):
+                return None
+        except Exception:
+            pass
         if gates.in_unattended_cron(ctx):
             return None
         message = kwargs.get("user_message")

@@ -12,6 +12,7 @@ from tests.support import FakeService, load_plugin
 
 plugin = load_plugin()
 capture = plugin.capture
+gates = plugin.gates
 state = plugin.state
 runtime = plugin.runtime
 PluginError = plugin.PluginError
@@ -342,6 +343,33 @@ class CaptureTestCase(unittest.TestCase):
         self.assertIsNotNone(
             capture.terminal_payload(self.terminal_kwargs(session_id="s-sub-1"), FakeCtx(), make_settings)
         )
+
+    def test_terminal_payload_skips_kanban_workers(self):
+        import os
+
+        os.environ["HERMES_KANBAN_TASK"] = "task-9"
+        try:
+            self.assertIsNone(
+                capture.terminal_payload(self.terminal_kwargs(), FakeCtx(), make_settings)
+            )
+        finally:
+            del os.environ["HERMES_KANBAN_TASK"]
+        self.assertIsNotNone(
+            capture.terminal_payload(self.terminal_kwargs(), FakeCtx(), make_settings)
+        )
+
+    def test_terminal_payload_skips_cron_sessions(self):
+        import os
+
+        os.environ["HERMES_CRON_SESSION"] = "1"
+        try:
+            self.assertIsNone(
+                capture.terminal_payload(self.terminal_kwargs(), FakeCtx(), make_settings)
+            )
+            self.assertTrue(gates.in_unattended_cron(FakeCtx()))
+        finally:
+            del os.environ["HERMES_CRON_SESSION"]
+        self.assertFalse(gates.in_unattended_cron(FakeCtx()))
 
     def test_terminal_message_published_as_evidence(self):
         payload = capture.terminal_payload(self.terminal_kwargs(), FakeCtx(), make_settings)
