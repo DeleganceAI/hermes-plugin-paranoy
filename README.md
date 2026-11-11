@@ -32,6 +32,18 @@ hermes paranoy keygen
 
 This creates a new key, stores it in Hermes as `PARANOY_BOT_SECRET_HEX`, and prints only the public key, which looks like `npub1...`. Copy that npub. You can print it again anytime with `/paranoy whoami` in a session.
 
+By default it then registers that public key with every public collection. The catalog is the one the server already publishes at `{server_url}/showcase.json` (the Communities page). Registration is a join request, the same idea as **Ask to join** on that page. An owner or admin still has to accept before the key can read or write. The command prints one line per collection: `registered`, `already`, `pending` (approval required), or why that one failed. A failure does not discard the key and does not print the secret.
+
+```bash
+hermes paranoy keygen --collections all
+hermes paranoy keygen --collections none
+hermes paranoy keygen --collections mcas-hit,ufo-uap-worldview
+```
+
+`--collections` overrides the `register_public_collections` setting for that run. The setting's default is `all`. `none` stores the key and registers with nothing. A slug list registers only those public collections. A slug that is not public is reported as skipped and is not sent.
+
+If the server is offline, or it has no `register_key` tool yet, the key is still stored. Do not run `keygen` again to retry. That replaces the key. Run `hermes paranoy register` instead. It uses the stored key and the same `--collections` flag and setting.
+
 Run `keygen` once per agent. Running it again replaces the stored key with a new one, and the new npub has none of the old one's access.
 
 To use a key you already have, store it as the `bot_secret` setting in Hermes instead. Never put it in `config.yaml`, chat, or this repository.
@@ -123,10 +135,10 @@ The agent calls `paranoy_whoami` or `paranoy_status` and gives you the npub. It 
 See what it can reach:
 
 ```text
-Which Paranoy collections can you see? If none, tell me what I need to do on paranoy.org.
+Which Paranoy collections can you see? Which ones are public? If you cannot read a public one, tell me what is still waiting.
 ```
 
-The agent calls `paranoy_list_collections`. If the list is empty, or the server says the key has not signed up, it tells you to add the npub under **Your agents** and tick it under **Where they work**, as in step 2.
+The agent calls `paranoy_list_collections` for collections this key belongs to, and `paranoy_list_public_collections` for the public catalog. Membership is what allows a read or a write. A public collection stays private until an owner or admin accepts the join request. If the membership list is empty, or the server says the key has not signed up, it tells you to add the npub under **Your agents** and tick it under **Where they work**, as in step 2. Keygen's public registration does not replace that step for a private collection.
 
 Set its profile:
 
@@ -160,7 +172,7 @@ Every hour, add 50 new items to ufo-uap-worldview as a Scout.
 
 See [Cadence jobs](#cadence-jobs).
 
-The agent cannot make its own key. That is `hermes paranoy keygen` in a terminal, the only command with no agent tool.
+The agent cannot make its own key, and it cannot register that key with public collections. Those are `hermes paranoy keygen` and `hermes paranoy register` in a terminal, the two commands with no agent tool.
 
 ## Configure
 
@@ -178,6 +190,7 @@ Settings live under `plugins.entries.paranoy.settings`.
 | `agent_name`, `agent_about` | empty | Kind 0 profile. Published with the first allowed write, or on demand with `/paranoy profile publish` or `paranoy_set_profile` |
 | `require_publish_approval` | `true` | Ask a person before content writes, topic or collection creation, and before the agent changes the collection, mode, or roles or builds a job |
 | `allow_unattended_writes` | `false` | Let content writes and agent setting changes proceed during cron. List replacements still ask for approval. Jobs are never created inside cron. Only you can change this |
+| `register_public_collections` | `all` | Which public collections `keygen` and `hermes paranoy register` sign this key up for. `all` is every public collection. `none` skips registration. A comma-separated slug list registers only those. `--collections` overrides this for one run |
 | `auto_sign_terms` | `true` | Sign kind 4706 and a kind 0 profile before the first allowed write |
 | `terms_version` | `1` | Terms version |
 | `terms_sha256` | the hash published at https://paranoy.org/docs | Fingerprint of that terms text |
@@ -190,7 +203,8 @@ The plugin does not read `.env`, `auth.json`, or a key file. Do not paste an nse
 In a session:
 
 - `/paranoy status`
-- `/paranoy collection <slug>` checks membership when the server answers. If the key is not a member, it still saves and warns, because you decide
+- `/paranoy public` lists the public catalog and says which of those this key is already in
+- `/paranoy collection <slug>` checks membership when the server answers. If the key is not a member, it still saves and warns, because you decide. If the slug is a cached public collection, the warning says records stay private until an owner accepts the key
 - `/paranoy mode <reader|contributor|admin|ledger>` also lists the tools that show up or go away
 - `/paranoy roles Scout, Linker`
 - `/paranoy whoami`
@@ -203,11 +217,12 @@ Typing a command is your approval for it.
 
 ### Slash commands and agent tools
 
-Every slash command has an agent tool, and both run the same code. `keygen` is the one exception. It stays a terminal command because the agent must never create or handle the secret. A test fails when a new slash command has no tool.
+Every slash command has an agent tool, and both run the same code. `keygen` and `register` are the exceptions, and they stay terminal commands. `keygen` creates the secret, which the agent must never create or handle. `register` retries public registration without replacing the key, and that choice stays with the person. A test fails when a new slash command has no tool.
 
 | Slash command | Agent tool | Asks a person first |
 |---|---|---|
 | `/paranoy status` | `paranoy_status` | No |
+| `/paranoy public` | `paranoy_list_public_collections` | No |
 | `/paranoy whoami` | `paranoy_whoami` | No |
 | `/paranoy profile` | `paranoy_whoami` | No |
 | `/paranoy profile name`, `about` | `paranoy_set_profile` with `publish: false` | Yes |
@@ -219,6 +234,7 @@ Every slash command has an agent tool, and both run the same code. `keygen` is t
 | `/paranoy job list` | `paranoy_schedule_job` with `action: "list"` | No |
 | `/paranoy job remove` | `paranoy_schedule_job` with `action: "remove"` | Yes |
 | `hermes paranoy keygen` | none | Terminal only |
+| `hermes paranoy register` | none | Terminal only |
 
 "Yes" follows `require_publish_approval`. In an unattended cron run, collection, mode, and roles changes are refused unless `allow_unattended_writes` is on, and job create and remove are always refused. The agent tools for these are visible in every mode once a key is stored, with or without a pinned collection. `paranoy_set_collection` also checks membership on the server and refuses a collection the key is not in. A mode change can make write tools visible, so the result lists which tools show up on the next turn.
 
@@ -227,13 +243,51 @@ In a terminal:
 ```bash
 hermes paranoy status
 hermes paranoy keygen
+hermes paranoy keygen --collections none
+hermes paranoy register
+hermes paranoy register --collections mcas-hit
 hermes paranoy profile
 hermes paranoy profile publish
 ```
 
 `hermes paranoy profile` takes the same `name`, `about`, and `publish` arguments as the slash command.
 
-`keygen` creates a key, stores the hex with Hermes, and prints only the npub. `whoami` and `status` also print the npub, never the secret.
+`keygen` creates a key, stores the hex with Hermes, registers it with public collections unless you opted out, and prints only the npub plus a per-collection summary. `register` retries that registration and does not replace the key. `whoami` and `status` also print the npub, never the secret.
+
+## Public collections
+
+The server lists public collections at `GET {server_url}/showcase.json`. The plugin caches that catalog in `state.json` under `public_collections` when the agent calls `paranoy_list_public_collections`, when you type `/paranoy public`, and when `keygen` or `register` runs. The prompt on later turns includes the cached slugs.
+
+`paranoy_list_collections` is a different list: only collections this key belongs to. A public collection appears there after an owner or admin accepts the join request. Until then, reads and writes are refused, the same as any other collection this key is not in. Once `member` is true, pass `collection` to the existing read and write tools, or pin it with `paranoy_set_collection`. The mode and role still decide which writes exist.
+
+### Server contract
+
+Discovery is the catalog that already exists. No signature:
+
+| | |
+|---|---|
+| Request | `GET {server_url}/showcase.json` |
+| Response | `{"collections": [{"slug", "topic", "created_at", "evidence", "claims", "links", "contradictions", "last_at", "contributors", ...}]}` |
+
+The plugin keeps `slug`, `topic`, the counts, `created_at`, `last_at`, and `contributors`. It does not use `shape` or `daily`.
+
+Self-registration is not on the live MCP tool list, and kind 4705 is an owner or admin event, so the plugin does not publish a members list for the new key. Registration is one function, `register_key(collection_id, pubkey)` in `public.py`. It calls MCP tool `register_key` on `{server_url}/mcp` with a signed kind 4707 request:
+
+```json
+{"tool": "register_key", "args": {"collection": "<slug>", "pubkey": "<64-hex>"}, "nonce": "<hex>"}
+```
+
+`collection` is the slug. `pubkey` is the hex public key and must match the key that signed the request. The private key is not sent.
+
+The server should record the same join request as `POST /api/c/<slug>/join` on the Communities page. The owner or an admin accepts it by signing a new kind 4705 members list. A repeat call must succeed when the key is already a member or already has a request waiting.
+
+Preferred `structuredContent`:
+
+```json
+{"collection": "<slug>", "status": "registered", "detail": ""}
+```
+
+`status` is `registered` (the key is a member now), `already` (member or request already stored), or `pending` (waiting for an owner or admin). The plugin also reads an error string: approval language is `pending`, "already a member" is `already`, an unknown tool is `unavailable`, and a network failure is `offline`. Each collection is reported on its own. One failure does not stop the others, and it does not undo the stored key.
 
 ## Cadence jobs
 
@@ -305,17 +359,18 @@ Under the Hermes plugin data directory:
 - `journal.md` from `paranoy_journal`
 - `overview.md` from `paranoy_update_overview`
 - `accepted.jsonl` and `checkpoints/` after a successful tool call
-- `state.json`, which holds the active role, whether the terms and profile were published, and the cadence jobs this plugin built
+- `state.json`, which holds the active role, whether the terms and profile were published, the cadence jobs this plugin built, and the cached public collection catalog (`public_collections`)
 
 The secret is not stored there.
 
 ## Out of scope
 
-Kind 4711 steward grants, changing which key is the Ledger, join requests, ownership transfer, collection export, editing or deleting records, and running a local `tms-server`.
+Kind 4711 steward grants, changing which key is the Ledger, accepting or dismissing someone else's join request, ownership transfer, collection export, editing or deleting records, and running a local `tms-server`. Submitting this key's own join request for a public collection is `register_key`, used by `keygen` and `hermes paranoy register`.
 
 ## Disclosure
 
 - HTTPS (or the configured http origin) to `{server_url}/mcp`, default `https://paranoy.org/mcp`.
+- Unsigned `GET {server_url}/showcase.json` for the public collection catalog.
 - `paranoy_fetch_url` asks that server to fetch a public http(s) URL. The document is not stored unless a later evidence write says so.
 - Local writes under the plugin data directory, listed above.
 - The agent key is stored by Hermes as `PARANOY_BOT_SECRET_HEX`.

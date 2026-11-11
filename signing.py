@@ -176,8 +176,18 @@ class Signer:
         return self.sign_event(4707, body, created_at=created_at)
 
 
+STORE_FAILED = (
+    "A key was generated but Hermes could not store it. "
+    "Nothing was saved and no secret was printed. Run keygen again inside Hermes."
+)
+
+
 def generate_and_store(save) -> str:
-    """Create a key, hand the hex to Hermes' saver, and return only the npub."""
+    """Create a key, hand the hex to Hermes' saver, and return only the npub.
+
+    This does not register the key. ``public.run_keygen`` stores the same way
+    and then registers with public collections.
+    """
     from . import schemas
 
     secret_hex = secrets.token_bytes(32).hex()
@@ -185,10 +195,7 @@ def generate_and_store(save) -> str:
     try:
         save(schemas.SECRET_ENV, secret_hex)
     except Exception:
-        return (
-            "A key was generated but Hermes could not store it. "
-            "Nothing was saved and no secret was printed. Run keygen again inside Hermes."
-        )
+        return STORE_FAILED
     return f"Stored a new agent key with Hermes as {schemas.SECRET_ENV}. npub: {npub}"
 
 

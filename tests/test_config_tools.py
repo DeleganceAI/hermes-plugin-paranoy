@@ -260,7 +260,7 @@ class SlashParityTests(KeyedTestCase):
     def test_every_slash_command_has_a_tool(self):
         """A new /paranoy subcommand fails here until it gets an agent tool."""
         commands_seen = set(gates.SLASH_COMMANDS)
-        self.assertEqual(set(schemas.TERMINAL_ONLY), {"keygen"})
+        self.assertEqual(set(schemas.TERMINAL_ONLY), {"keygen", "register"})
         for command in commands_seen - set(schemas.TERMINAL_ONLY):
             self.assertIn(command, schemas.SLASH_TOOLS, command)
         for sub in gates.PROFILE_SUBCOMMANDS:

@@ -34,6 +34,13 @@ def list_collections(service, settings, args) -> dict:
     return service.call("list_collections", {})
 
 
+def list_public_collections(service, settings, args) -> dict:
+    del args
+    from ..public import list_for_agent
+
+    return list_for_agent(service, settings)
+
+
 def list_members(service, settings, args) -> dict:
     collection = _scoped(service, settings, "paranoy_list_members", args)
     return service.call("list_members", {"collection": collection})
@@ -129,12 +136,21 @@ def status(service, settings, args) -> dict:
         "terms_version": settings.get("terms_version"),
         "terms_sha256": settings.get("terms_sha256"),
         "steward_grants": grants,
+        "public_collections": _cached_public(),
+        "register_public_collections": settings.get("register_public_collections") or "all",
         "note": schemas.RETRIEVAL_NOTE,
     }
 
 
+def _cached_public():
+    from ..public import cached_snapshot
+
+    return cached_snapshot()
+
+
 READ_FUNCTIONS = {
     "paranoy_list_collections": list_collections,
+    "paranoy_list_public_collections": list_public_collections,
     "paranoy_list_members": list_members,
     "paranoy_list_delegations": list_delegations,
     "paranoy_search_claims": search_claims,

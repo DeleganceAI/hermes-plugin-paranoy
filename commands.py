@@ -2,9 +2,10 @@
 
 Each subcommand and its tool call the same function here, so the two cannot
 drift. ``SLASH_TOOLS`` in ``schemas`` maps every subcommand to its tool, and a
-test fails when a new subcommand has no tool. ``keygen`` is the one
-exception: it stays a terminal command, because the agent never creates or
-handles the secret.
+test fails when a new subcommand has no tool. ``keygen`` and ``register``
+stay terminal commands. ``keygen`` creates the secret, and ``register``
+retries public-collection registration without rotating that key. The agent
+never creates or handles the secret.
 """
 
 from __future__ import annotations
@@ -139,12 +140,17 @@ def set_collection(
         available = sorted({item["slug"] for item in members})
         row = next((item for item in members if item["slug"] == slug), None)
         if row is None:
+            from .public import membership_hint
+
+            hint = membership_hint(slug)
             if strict:
-                raise MembershipError(slug, available)
+                raise MembershipError(slug, available, hint)
             warning = (
                 f"This key is not listed as a member of {slug}. Reads will fail until it is. "
                 f"Collections this key can use: {', '.join(available) if available else '(none)'}."
             )
+            if hint:
+                warning = warning + " " + hint
     save("collection", slug)
     result = {
         "previous": previous,
@@ -172,14 +178,17 @@ def set_collection(
 
 
 class MembershipError(PluginError):
-    def __init__(self, slug: str, available: list[str]):
+    def __init__(self, slug: str, available: list[str], hint: str = ""):
         self.slug = slug
         self.available = available
         listed = ", ".join(available) if available else "(none)"
-        super().__init__(
+        message = (
             f"This key is not a member of {slug}, so the collection was not changed. "
             f"Collections this key can use: {listed}."
         )
+        if hint:
+            message = message + " " + hint
+        super().__init__(message)
 
 
 def set_mode(settings: dict, mode, save) -> dict:

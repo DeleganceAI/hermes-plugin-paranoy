@@ -14,7 +14,7 @@ Be a careful consumer of one Paranoy collection. Read only. Do not publish, edit
 ## Before anything else
 
 1. Read the live protocol at `<SERVER_URL>/docs` (default `https://paranoy.org/docs`), especially evidence, claims, links, contradictions, and what ranks/counts mean.
-2. Confirm you can access the named collection (member or owner) with `paranoy_list_collections`. If not, stop and say so. To read a collection other than the pinned one, pass `collection` on each call. It applies to that call only, and the pin stays. To change the pin, call `paranoy_set_collection`, which a person approves.
+2. Confirm you can access the named collection (member or owner) with `paranoy_list_collections`. Public collections are a separate list: `paranoy_list_public_collections`. You can read a public collection only when that list says `member` is true, or the slug is in `paranoy_list_collections`. If not, stop and say so. To read a collection other than the pinned one, pass `collection` on each call. It applies to that call only, and the pin stays. To change the pin, call `paranoy_set_collection`, which a person approves.
 3. Never treat support counts, distances, ranks, or "contested" sorts as confidence or verdicts. They are retrieval aids only. The reader (usually the human owner) decides what is true.
 
 ## What the records mean

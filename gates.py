@@ -100,6 +100,10 @@ def read_settings(ctx) -> dict:
         "agent_about": str(_get(ctx, "agent_about", "") or "").strip(),
         "require_publish_approval": as_bool(_get(ctx, "require_publish_approval", True), True),
         "allow_unattended_writes": as_bool(_get(ctx, "allow_unattended_writes", False), False),
+        "register_public_collections": str(
+            _get(ctx, "register_public_collections", defaults["register_public_collections"])
+            or defaults["register_public_collections"]
+        ).strip(),
         "auto_sign_terms": as_bool(_get(ctx, "auto_sign_terms", True), True),
         "terms_version": str(_get(ctx, "terms_version", schemas.TERMS_VERSION) or schemas.TERMS_VERSION),
         "terms_sha256": str(_get(ctx, "terms_sha256", schemas.TERMS_SHA256) or schemas.TERMS_SHA256),
@@ -397,7 +401,15 @@ def status_text(settings: dict) -> str:
         f"npub: {npub or '(no key)'}",
         f"terms_version: {settings['terms_version']}",
         f"terms_sha256: {settings['terms_sha256']}",
+        f"register_public_collections: {settings.get('register_public_collections') or 'all'}",
     ]
+    try:
+        from .public import cached_rows
+
+        slugs = [str(row.get("slug")) for row in cached_rows() if row.get("slug")]
+        lines.append("public_collections: " + (", ".join(slugs) if slugs else "(not loaded)"))
+    except Exception:
+        lines.append("public_collections: (not loaded)")
     return "\n".join(lines)
 
 
@@ -482,6 +494,8 @@ def prompt_context(settings: dict) -> str:
             f"server: {settings['server_url']}",
             f"collection: {settings['collection'] or '(unset)'}",
             f"collections: {managed}",
+            f"register_public_collections: {settings.get('register_public_collections') or 'all'}",
+            _public_prompt_line(),
             f"roles: {roles}",
             f"active role: {active}",
             f"owner: {owner}",
@@ -498,6 +512,15 @@ def prompt_context(settings: dict) -> str:
             *hints,
         ]
     )
+
+
+def _public_prompt_line() -> str:
+    try:
+        from .public import prompt_public_line
+
+        return prompt_public_line()
+    except Exception:
+        return "public collections: (not loaded). Call paranoy_list_public_collections."
 
 
 def _reject_secret_text(value: str) -> bool:
@@ -544,7 +567,7 @@ def profile_text(settings: dict) -> str:
 
 
 PROFILE_USAGE = "Usage: /paranoy profile [name <text>|about <text>|publish]"
-USAGE = "Usage: /paranoy status|collection|mode|roles|whoami|profile|job"
+USAGE = "Usage: /paranoy status|public|collection|mode|roles|whoami|profile|job"
 JOB_USAGE = (
     "Usage: /paranoy job create --role <role> --collection <slug> --target <n> "
     '--cadence <hourly|"every 2h"|"0 * * * *"> [--focus "<text>"] [--name <name>]\n'
@@ -761,14 +784,42 @@ def _slash_job(ctx, settings, argument, parts, service_factory):
     return "\n".join(lines)
 
 
+def _slash_public(ctx, settings, argument, parts, service_factory):
+    del ctx, parts
+    if argument:
+        return USAGE
+    if not settings.get("key_configured") or service_factory is None:
+        return "No agent key is stored in Hermes yet. Run hermes paranoy keygen in a terminal."
+    from .public import format_public_list, list_for_agent
+
+    try:
+        service = service_factory(settings)
+        return format_public_list(list_for_agent(service, settings))
+    except PluginError as exc:
+        return str(exc)
+
+
 def _slash_keygen(ctx, settings, argument, parts, service_factory):
-    return "Keygen is a terminal command: hermes paranoy keygen"
+    del ctx, settings, argument, parts, service_factory
+    return (
+        "Keygen is a terminal command: hermes paranoy keygen "
+        '[--collections all|none|slug,slug]'
+    )
+
+
+def _slash_register(ctx, settings, argument, parts, service_factory):
+    del ctx, settings, argument, parts, service_factory
+    return (
+        "Register is a terminal command: hermes paranoy register "
+        '[--collections all|none|slug,slug]. It does not replace the stored key.'
+    )
 
 
 # Every /paranoy subcommand. schemas.SLASH_TOOLS maps each one, except the
-# terminal-only keygen, to the agent tool that does the same thing.
+# terminal-only keygen and register, to the agent tool that does the same thing.
 SLASH_COMMANDS = {
     "status": _slash_status,
+    "public": _slash_public,
     "collection": _slash_collection,
     "mode": _slash_mode,
     "roles": _slash_roles,
@@ -776,6 +827,7 @@ SLASH_COMMANDS = {
     "profile": _slash_profile,
     "job": _slash_job,
     "keygen": _slash_keygen,
+    "register": _slash_register,
 }
 PROFILE_SUBCOMMANDS = ("", "name", "about", "publish")
 JOB_SUBCOMMANDS = ("", "create", "list", "remove")

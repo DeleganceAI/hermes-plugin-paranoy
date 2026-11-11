@@ -33,6 +33,7 @@ DEFAULTS = {
     "agent_about": "",
     "require_publish_approval": True,
     "allow_unattended_writes": False,
+    "register_public_collections": "all",
     "auto_sign_terms": True,
     "terms_version": TERMS_VERSION,
     "terms_sha256": TERMS_SHA256,
@@ -40,6 +41,7 @@ DEFAULTS = {
 
 READ_TOOLS = (
     "paranoy_list_collections",
+    "paranoy_list_public_collections",
     "paranoy_list_members",
     "paranoy_list_delegations",
     "paranoy_search_claims",
@@ -108,6 +110,7 @@ ALL_TOOL_NAMES = (
 COLLECTION_FREE = frozenset(
     {
         "paranoy_list_collections",
+        "paranoy_list_public_collections",
         "paranoy_list_delegations",
         "paranoy_fetch_url",
         "paranoy_get_event",
@@ -143,10 +146,12 @@ CONFIG_APPROVAL = frozenset(
     {"paranoy_set_collection", "paranoy_set_mode", "paranoy_set_roles"}
 )
 # Every /paranoy subcommand and the agent tool that does the same thing.
-# keygen is the one terminal-only command: the agent never creates or
-# handles the secret.
+# keygen and register are terminal-only. keygen creates the secret, and
+# register retries public-collection registration without rotating it.
+# The agent never creates or handles the secret.
 SLASH_TOOLS = {
     "status": "paranoy_status",
+    "public": "paranoy_list_public_collections",
     "collection": "paranoy_set_collection",
     "mode": "paranoy_set_mode",
     "roles": "paranoy_set_roles",
@@ -160,7 +165,7 @@ SLASH_TOOLS = {
     "job list": "paranoy_schedule_job",
     "job remove": "paranoy_schedule_job",
 }
-TERMINAL_ONLY = ("keygen",)
+TERMINAL_ONLY = ("keygen", "register")
 ROLE_CONTENT = {
     "Scout": {"paranoy_add_evidence", "paranoy_add_claim"},
     "Claim Miner": {"paranoy_add_claim"},
@@ -214,7 +219,15 @@ def _pubkeys(description: str) -> dict:
 SCHEMAS = {
     "paranoy_list_collections": _schema(
         "paranoy_list_collections",
-        "List Paranoy collections this key belongs to. This is the one read that is not pinned to a single collection.",
+        "List Paranoy collections this key belongs to. This is not the public catalog.",
+        {},
+    ),
+    "paranoy_list_public_collections": _schema(
+        "paranoy_list_public_collections",
+        "List public Paranoy collections from the server catalog and cache them. "
+        "This is not paranoy_list_collections, which is only collections this key belongs to. "
+        "A public collection's records stay private until this key is a member. "
+        "To read or contribute, pass collection on the other tools once member is true.",
         {},
     ),
     "paranoy_list_members": _schema(

@@ -1,12 +1,14 @@
 name: paranoy
-version: "0.4.0"
+version: "0.5.0"
 manifest_version: 2
 api_version: 1
 description: >
   Native Hermes plugin for a Paranoy evidence ledger. The agent key stays in
   Hermes as PARANOY_BOT_SECRET_HEX; the model never holds it. Reads and
   allowed writes are signed in-process and sent to server_url/mcp over
-  HTTPS. fetch_url asks that server to fetch public http(s) documents.
+  HTTPS. Public collections are read from server_url/showcase.json and
+  cached. Keygen registers the new key with them by default. fetch_url asks
+  that server to fetch public http(s) documents.
   Rejects, the Ponder journal, role checkpoints, and overview.md are written
   under the Hermes plugin data directory.
 author: DeleganceAI
@@ -18,6 +20,7 @@ python_dependencies:
   - "httpx>=0.27,<0.29"
 provides_tools:
   - paranoy_list_collections
+  - paranoy_list_public_collections
   - paranoy_list_members
   - paranoy_list_delegations
   - paranoy_search_claims
@@ -127,6 +130,17 @@ config_schema:
       Allow writes and agent setting changes during cron when nobody can
       answer. Also turn off require publish approval for those runs. Default
       refuses them.
+  register_public_collections:
+    type: str
+    default: "all"
+    label: Register with public collections
+    description: >
+      Which public collections keygen and hermes paranoy register sign this
+      key up for. "all" (default) is every public collection. "none" skips
+      registration. A comma-separated slug list registers only those. The
+      --collections flag overrides this for one run. Registration is a join
+      request. It does not print the secret, and a failure does not discard
+      the key.
   auto_sign_terms:
     type: bool
     default: true
