@@ -48,13 +48,87 @@ provides_tools:
   - paranoy_set_collection
   - paranoy_set_mode
   - paranoy_set_roles
+  - paranoy_set_capture
   - paranoy_whoami
   - paranoy_schedule_job
 provides_hooks:
   - pre_llm_call
   - pre_tool_call
   - post_tool_call
+  - pre_gateway_dispatch
+  - subagent_start
+  - subagent_stop
 config_schema:
+  capture_enabled:
+    type: bool
+    default: false
+    label: Capture enabled
+    description: >
+      Automatically file human messages as evidence and extract claims from
+      the agent's final answers. Off by default; enabling it is the person's
+      approval for automatic publishing.
+  capture_extract:
+    type: bool
+    default: true
+    label: Capture claim extraction
+    description: Extract contestable world-claims from the agent's final answers.
+  capture_rewrite:
+    type: bool
+    default: true
+    label: Capture rewrite
+    description: >
+      Rewrite the final answer once against claims retrieved from the
+      collection so it is consistent with and cites the ledger.
+  capture_platforms:
+    type: str
+    default: "slack,terminal"
+    label: Capture platforms
+    description: >
+      Comma-separated gateway platforms whose human messages are captured
+      ("all" for every platform; "terminal" covers the CLI and platforms
+      with no name). The answer
+      rewrite applies to these platforms too.
+  capture_collection:
+    type: str
+    default: ""
+    label: Capture collection
+    description: >
+      Collection the capture pipeline publishes to. Empty uses the pinned
+      collection.
+  capture_permalink_base:
+    type: str
+    default: ""
+    label: Capture permalink base
+    description: >
+      Slack workspace base URL, for example https://yourteam.slack.com, used
+      to build evidence permalinks. Empty omits the url field.
+  capture_max_claims:
+    type: int
+    default: 3
+    label: Capture max claims
+    description: Cap on claims published per message or answer.
+  capture_retrieval_limit:
+    type: int
+    default: 8
+    label: Capture retrieval limit
+    description: Claims retrieved for the rewrite pass.
+  capture_dupe_distance:
+    type: float
+    default: 0.15
+    label: Capture duplicate distance
+    description: >
+      Cosine-distance threshold for the vector near-duplicate check on new
+      claims. A candidate within this distance of an existing claim is
+      skipped. Measured on the collection's own embeddings: verbatim 0.06,
+      paraphrase 0.09-0.14, related-but-different 0.18+.
+  capture_terminal_source:
+    type: str
+    default: ""
+    label: Capture terminal source
+    description: >
+      The source name recorded on evidence captured from terminal-mode
+      human messages. Empty falls back to the owner setting, then
+      "terminal".
   server_url:
     type: str
     default: "https://paranoy.org"

@@ -22,6 +22,7 @@ class Ctx:
         self.tools = {}
         self.skills = {}
         self.hooks = {}
+        self.middleware = {}
 
     def get_config(self, key, default=None):
         return self.settings.get(key, default)
@@ -44,6 +45,9 @@ class Ctx:
 
     def register_hook(self, name, callback, **kwargs):
         self.hooks[name] = callback
+
+    def register_middleware(self, kind, callback, **kwargs):
+        self.middleware[kind] = callback
 
     def register_tool(self, **kwargs):
         self.tools[kwargs["name"]] = kwargs

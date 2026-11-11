@@ -7,7 +7,7 @@ import logging
 import re
 from pathlib import Path
 
-from . import gates, schemas, state
+from . import capture, gates, schemas, state
 from .client import ParanoyClient, PluginError
 from .runtime import now_iso
 from .signing import SecretError, generate_and_store, load_secret_hex
@@ -117,11 +117,27 @@ def register(ctx):
     )
 
     def pre_llm_call(**kwargs):
-        del kwargs
+        # Terminal-mode evidence capture: the gateway path handles messaging
+        # platforms; pre_llm_call fires once per turn on every surface, so
+        # the strictly-terminal check inside keeps the two paths disjoint.
+        try:
+            payload = capture.terminal_payload(kwargs, ctx, settings_factory)
+            if payload is not None:
+                capture.start_inbound_thread(payload, ctx, settings_factory, service_factory)
+        except Exception:
+            pass
         try:
             return {"context": gates.prompt_context(settings_factory())}
         except Exception:
             return None
+
+    def subagent_start(**kwargs):
+        capture.note_subagent_started(kwargs.get("child_session_id"))
+        return None
+
+    def subagent_stop(**kwargs):
+        capture.note_subagent_stopped(kwargs.get("child_session_id"))
+        return None
 
     def pre_tool_call(**kwargs):
         return gates.pre_tool_directive(ctx, kwargs.get("tool_name"), kwargs.get("args"))
@@ -166,6 +182,32 @@ def register(ctx):
     ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("post_tool_call", post_tool_call)
 
+    def pre_gateway_dispatch(**kwargs):
+        """Capture human messages off the turn's critical path. Never alters flow."""
+        try:
+            payload = capture.inbound_payload(
+                kwargs.get("event"), kwargs.get("gateway"), ctx, settings_factory
+            )
+        except Exception:
+            payload = None
+        if payload is not None:
+            capture.start_inbound_thread(payload, ctx, settings_factory, service_factory)
+        return None
+
+    ctx.register_hook("pre_gateway_dispatch", pre_gateway_dispatch)
+    ctx.register_hook("subagent_start", subagent_start)
+    ctx.register_hook("subagent_stop", subagent_stop)
+
+    def llm_execution_middleware(**kwargs):
+        return capture.llm_execution(
+            ctx=ctx,
+            settings_factory=settings_factory,
+            service_factory=service_factory,
+            **kwargs,
+        )
+
+    ctx.register_middleware("llm_execution", llm_execution_middleware)
+
     def make_check(tool_name):
         def check_fn() -> bool:
             try:
@@ -176,7 +218,7 @@ def register(ctx):
         return check_fn
 
     def save_setting(key, value):
-        ctx.set_config(key, value)
+        gates.save_setting(ctx, key, value)
 
     for spec in (
         *read.build(service_factory, settings_factory),

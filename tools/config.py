@@ -35,6 +35,21 @@ def set_roles(service, settings, args, save_setting) -> dict:
     return commands.set_roles(settings, args.get("roles"), save_setting)
 
 
+def set_capture(service, settings, args, save_setting):
+    """Agent twin of /paranoy capture. Enabling automatic publishing is a
+    person's decision, so pre_tool_call escalates it for approval."""
+    del service, save_setting
+    from .. import capture
+
+    key = str(args.get("key") or "").strip()
+    value = args.get("value")
+    changed = None
+    if key and value is not None:
+        capture.set_capture_setting(key, value)
+        changed = {key: capture.read_capture_config(None)[key.replace("capture_", "")]}
+    return {"capture": capture.capture_status_text(None, settings), "changed": changed}
+
+
 def whoami(service, settings, args, save_setting) -> dict:
     del args, save_setting
     return commands.whoami(settings, service.npub)
@@ -44,6 +59,7 @@ FUNCTIONS = {
     "paranoy_set_collection": set_collection,
     "paranoy_set_mode": set_mode,
     "paranoy_set_roles": set_roles,
+    "paranoy_set_capture": set_capture,
     "paranoy_whoami": whoami,
 }
 

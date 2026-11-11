@@ -36,13 +36,33 @@ _SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def _get(ctx, key: str, default):
-    try:
-        value = ctx.get_config(key, default=default)
-    except Exception:
-        return default
-    if value is None:
-        return default
-    return value
+    """One setting: ctx config when Hermes has the surface (>= 0.21),
+    otherwise the plugin-local overlay in plugin state (Hermes 0.17 has
+    no ``ctx.get_config``), otherwise the default."""
+    get = getattr(ctx, "get_config", None)
+    if callable(get):
+        try:
+            value = get(key, default=default)
+        except Exception:
+            value = None
+        return default if value is None else value
+    overrides = state.load_state().get("plugin_settings") or {}
+    if key in overrides:
+        return overrides[key]
+    return default
+
+
+def save_setting(ctx, key: str, value) -> None:
+    """Write one setting. ctx.set_config is authoritative when it exists;
+    otherwise the write lands in plugin-local state."""
+    set_config = getattr(ctx, "set_config", None)
+    if callable(set_config):
+        set_config(key, value)
+        return
+    stored = state.load_state()
+    overrides = dict(stored.get("plugin_settings") or {})
+    overrides[key] = value
+    state.save_state({**stored, "plugin_settings": overrides})
 
 
 def as_bool(value, default: bool = False) -> bool:
@@ -207,10 +227,19 @@ def args_look_sensitive(args: dict) -> bool:
 
 def in_unattended_cron(ctx) -> bool:
     current = getattr(ctx, "current_cron_execution", None)
-    if not callable(current):
-        return False
+    if callable(current):
+        try:
+            if current() is not None:
+                return True
+        except Exception:
+            pass
+    # Hermes marks scheduler sessions with this env var "so the approval
+    # system can apply cron_mode" (cron/scheduler.py). Hermes versions without
+    # ctx.current_cron_execution rely on it entirely.
+    import os
+
     try:
-        return current() is not None
+        return os.environ.get("HERMES_CRON_SESSION") == "1"
     except Exception:
         return False
 
@@ -236,6 +265,13 @@ def _config_arg_block(settings: dict, tool_name: str, args: dict) -> str | None:
             check_mode(args.get("mode"))
         elif tool_name == "paranoy_set_roles":
             check_roles(args.get("roles"))
+        elif tool_name == "paranoy_set_capture":
+            key = str(args.get("key") or "").strip()
+            value = args.get("value")
+            if key and value is not None:
+                from . import capture
+
+                capture.validate_capture_setting(key, value)
     except PluginError as exc:
         return str(exc)
     return None
@@ -273,6 +309,15 @@ def _config_message(settings: dict, tool_name: str, args: dict) -> str:
             f"Approve changing the Paranoy mode from {settings.get('mode')} to "
             f"{str(args.get('mode') or '').strip().lower()}. This changes which tools the agent "
             "can use, including writes. Nothing is published."
+        )
+    if tool_name == "paranoy_set_capture":
+        key = str(args.get("key") or "").strip()
+        if not key or args.get("value") is None:
+            return "Approve reading the Paranoy capture settings. Nothing is published."
+        return (
+            f"Approve changing the Paranoy capture setting {key} to {args.get('value')}. "
+            "Capture publishes messages and answers to the ledger automatically without "
+            "per-write approval. Nothing is published by this call itself."
         )
     return (
         "Approve changing the Paranoy contributor roles. This changes which write tools the "
@@ -544,7 +589,10 @@ def profile_text(settings: dict) -> str:
 
 
 PROFILE_USAGE = "Usage: /paranoy profile [name <text>|about <text>|publish]"
-USAGE = "Usage: /paranoy status|collection|mode|roles|whoami|profile|job"
+USAGE = (
+    "Usage: /paranoy status|collection|mode|roles|whoami|profile|job\n"
+    "       /paranoy capture [status|on|off|<key> <value>]"
+)
 JOB_USAGE = (
     "Usage: /paranoy job create --role <role> --collection <slug> --target <n> "
     '--cadence <hourly|"every 2h"|"0 * * * *"> [--focus "<text>"] [--name <name>]\n'
@@ -565,7 +613,7 @@ def _profile_command(ctx, settings: dict, parts: list[str], service_factory) -> 
         if not value:
             return f"{sub}: {profile_content(settings)[sub]}"
         try:
-            merged = save_profile(settings, {sub: value}, ctx.set_config)
+            merged = save_profile(settings, {sub: value}, lambda key, value: save_setting(ctx, key, value))
         except PluginError as exc:
             return str(exc)
         cleaned = profile_content(merged)[sub]
@@ -629,7 +677,7 @@ def _slash_collection(ctx, settings, argument, parts, service_factory):
         return str(exc)
     rows, pubkey = _listing(settings, service_factory)
     try:
-        result = commands.set_collection(settings, argument, ctx.set_config, rows, pubkey, strict=False)
+        result = commands.set_collection(settings, argument, lambda key, value: save_setting(ctx, key, value), rows, pubkey, strict=False)
     except PluginError as exc:
         return str(exc)
     lines = [f"collection: {result['collection']}"]
@@ -644,7 +692,7 @@ def _slash_mode(ctx, settings, argument, parts, service_factory):
     if not argument:
         return f"mode: {settings['mode']}"
     try:
-        result = commands.set_mode(settings, argument, ctx.set_config)
+        result = commands.set_mode(settings, argument, lambda key, value: save_setting(ctx, key, value))
     except PluginError as exc:
         return str(exc)
     return "\n".join([f"mode: {result['mode']}", *commands.describe_visibility(result)])
@@ -656,7 +704,7 @@ def _slash_roles(ctx, settings, argument, parts, service_factory):
     if not argument:
         return f"roles: {settings['roles'] or '(unset)'}"
     try:
-        result = commands.set_roles(settings, argument, ctx.set_config)
+        result = commands.set_roles(settings, argument, lambda key, value: save_setting(ctx, key, value))
     except PluginError as exc:
         return str(exc)
     return "\n".join([f"roles: {', '.join(result['roles'])}", *commands.describe_visibility(result)])
@@ -767,6 +815,24 @@ def _slash_keygen(ctx, settings, argument, parts, service_factory):
 
 # Every /paranoy subcommand. schemas.SLASH_TOOLS maps each one, except the
 # terminal-only keygen, to the agent tool that does the same thing.
+def _slash_capture(ctx, settings, argument, parts, service_factory):
+    from . import capture
+
+    tokens = [part for part in parts[1:] if part]
+    if not tokens or tokens[0].lower() == "status":
+        return capture.capture_status_text(ctx, settings)
+    if len(tokens) == 1 and tokens[0].lower() in {"on", "off"}:
+        capture.set_capture_setting("capture_enabled", tokens[0].lower())
+        return capture.capture_status_text(ctx, settings)
+    if len(tokens) != 2:
+        return "Usage: /paranoy capture [status|on|off|<key> <value>]"
+    try:
+        capture.set_capture_setting(tokens[0].lower(), tokens[1])
+    except PluginError as exc:
+        return str(exc)
+    return capture.capture_status_text(ctx, settings)
+
+
 SLASH_COMMANDS = {
     "status": _slash_status,
     "collection": _slash_collection,
@@ -776,6 +842,7 @@ SLASH_COMMANDS = {
     "profile": _slash_profile,
     "job": _slash_job,
     "keygen": _slash_keygen,
+    "capture": _slash_capture,
 }
 PROFILE_SUBCOMMANDS = ("", "name", "about", "publish")
 JOB_SUBCOMMANDS = ("", "create", "list", "remove")
