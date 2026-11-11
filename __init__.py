@@ -117,11 +117,27 @@ def register(ctx):
     )
 
     def pre_llm_call(**kwargs):
-        del kwargs
+        # Terminal-mode evidence capture: the gateway path handles messaging
+        # platforms; pre_llm_call fires once per turn on every surface, so
+        # the strictly-terminal check inside keeps the two paths disjoint.
+        try:
+            payload = capture.terminal_payload(kwargs, ctx, settings_factory)
+            if payload is not None:
+                capture.start_inbound_thread(payload, ctx, settings_factory, service_factory)
+        except Exception:
+            pass
         try:
             return {"context": gates.prompt_context(settings_factory())}
         except Exception:
             return None
+
+    def subagent_start(**kwargs):
+        capture.note_subagent_started(kwargs.get("child_session_id"))
+        return None
+
+    def subagent_stop(**kwargs):
+        capture.note_subagent_stopped(kwargs.get("child_session_id"))
+        return None
 
     def pre_tool_call(**kwargs):
         return gates.pre_tool_directive(ctx, kwargs.get("tool_name"), kwargs.get("args"))
@@ -179,6 +195,8 @@ def register(ctx):
         return None
 
     ctx.register_hook("pre_gateway_dispatch", pre_gateway_dispatch)
+    ctx.register_hook("subagent_start", subagent_start)
+    ctx.register_hook("subagent_stop", subagent_stop)
 
     def llm_execution_middleware(**kwargs):
         return capture.llm_execution(

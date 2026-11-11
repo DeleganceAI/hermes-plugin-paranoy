@@ -172,7 +172,14 @@ ROLE_CONTENT = {
     "Ponder": set(),
     "Ledger": set(),
 }
-HOOKS = ("pre_llm_call", "pre_tool_call", "post_tool_call", "pre_gateway_dispatch")
+HOOKS = (
+    "pre_llm_call",
+    "pre_tool_call",
+    "post_tool_call",
+    "pre_gateway_dispatch",
+    "subagent_start",
+    "subagent_stop",
+)
 SKILLS = ("reader", "contributor", "admin", "ledger", "setup", "cadence")
 EVIDENCE_PAGE_CHARS = 20000
 EVIDENCE_CHAR_CAP = 200000

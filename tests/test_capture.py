@@ -289,6 +289,84 @@ class CaptureTestCase(unittest.TestCase):
         with self.assertRaises(PluginError):
             capture.set_capture_setting("capture_dupe_distance", 5)
 
+    # -- terminal path ------------------------------------------------------
+
+    def terminal_kwargs(self, text="I just reran the plugin test suite and all 110 tests passed.", **overrides):
+        kwargs = {
+            "session_id": "s-terminal-1",
+            "turn_id": "t1",
+            "user_message": text,
+            "platform": "cli",
+            "sender_id": "",
+            "is_first_turn": True,
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    def test_terminal_payload_built_for_cli(self):
+        payload = capture.terminal_payload(self.terminal_kwargs(), FakeCtx(), make_settings)
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["platform"], "terminal")
+        self.assertEqual(payload["user_name"], "terminal")
+        self.assertEqual(payload["dupe_distance"], 0.15)
+
+    def test_terminal_payload_uses_terminal_source_setting(self):
+        capture.set_capture_setting("capture_terminal_source", "Dustin")
+        payload = capture.terminal_payload(self.terminal_kwargs(), FakeCtx(), make_settings)
+        self.assertEqual(payload["user_name"], "Dustin")
+
+    def test_terminal_payload_refuses_messaging_platforms(self):
+        # Slack is captured by pre_gateway_dispatch; firing here too would double-capture.
+        self.assertIsNone(
+            capture.terminal_payload(self.terminal_kwargs(platform="slack"), FakeCtx(), make_settings)
+        )
+
+    def test_terminal_payload_skips_commands_and_short_text(self):
+        self.assertIsNone(
+            capture.terminal_payload(self.terminal_kwargs(text="/paranoy status"), FakeCtx(), make_settings)
+        )
+        self.assertIsNone(
+            capture.terminal_payload(self.terminal_kwargs(text="ok"), FakeCtx(), make_settings)
+        )
+
+    def test_terminal_payload_skips_subagent_sessions(self):
+        capture.note_subagent_started("s-sub-1")
+        try:
+            self.assertIsNone(
+                capture.terminal_payload(
+                    self.terminal_kwargs(session_id="s-sub-1"), FakeCtx(), make_settings
+                )
+            )
+        finally:
+            capture.note_subagent_stopped("s-sub-1")
+        self.assertIsNotNone(
+            capture.terminal_payload(self.terminal_kwargs(session_id="s-sub-1"), FakeCtx(), make_settings)
+        )
+
+    def test_terminal_message_published_as_evidence(self):
+        payload = capture.terminal_payload(self.terminal_kwargs(), FakeCtx(), make_settings)
+        self.assertIsNotNone(payload)
+        llm = FakeLlm(
+            parsed={
+                "has_content": True,
+                "observation": True,
+                "claims": [
+                    {
+                        "text": "The paranoy plugin test suite passes with 110 tests.",
+                        "rebuttal": "A failing test run.",
+                    }
+                ],
+            }
+        )
+        service = self.service()
+        capture.run_inbound(payload, FakeCtx(llm), make_settings, lambda s: service)
+        events = service.published[0]
+        evidence = next(event for event in events if event["kind"] == 4701)
+        content = json.loads(evidence["content"])
+        self.assertEqual(content["source"], "terminal")
+        self.assertEqual(content["retrieved_via"], "terminal")
+        self.assertNotIn("url", content)
+
     # -- middleware --------------------------------------------------------
 
     def response(self, text="The new pump used 18 Wh.", finish="stop", tools=None):

@@ -56,6 +56,8 @@ provides_hooks:
   - pre_tool_call
   - post_tool_call
   - pre_gateway_dispatch
+  - subagent_start
+  - subagent_stop
 config_schema:
   capture_enabled:
     type: bool
@@ -119,6 +121,14 @@ config_schema:
       claims. A candidate within this distance of an existing claim is
       skipped. Measured on the collection's own embeddings: verbatim 0.06,
       paraphrase 0.09-0.14, related-but-different 0.18+.
+  capture_terminal_source:
+    type: str
+    default: ""
+    label: Capture terminal source
+    description: >
+      The source name recorded on evidence captured from terminal-mode
+      human messages. Empty falls back to the owner setting, then
+      "terminal".
   server_url:
     type: str
     default: "https://paranoy.org"

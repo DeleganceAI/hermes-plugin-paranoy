@@ -41,6 +41,7 @@ _CAPTURE_KEYS = (
     "capture_max_claims",
     "capture_retrieval_limit",
     "capture_dupe_distance",
+    "capture_terminal_source",
 )
 
 _DEFAULT_PLATFORMS = "slack,terminal"
@@ -175,6 +176,7 @@ def read_capture_config(ctx) -> dict:
         "max_claims": max_claims,
         "retrieval_limit": retrieval_limit,
         "dupe_distance": dupe_distance,
+        "terminal_source": str(get("capture_terminal_source", "") or "").strip(),
     }
 
 
@@ -475,6 +477,72 @@ def publish_records(service, settings: dict, events: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 # Path A — human messages (pre_gateway_dispatch, background thread)
 # ---------------------------------------------------------------------------
+
+# Sessions spawned by delegate/subagent runs: their "user messages" are
+# synthetic prompts, not human speech. pre_llm_call capture refuses them.
+_SUBAGENT_SESSIONS: set[str] = set()
+
+
+def note_subagent_started(child_session_id) -> None:
+    try:
+        if child_session_id:
+            _SUBAGENT_SESSIONS.add(str(child_session_id))
+    except Exception:
+        pass
+
+
+def note_subagent_stopped(child_session_id) -> None:
+    try:
+        _SUBAGENT_SESSIONS.discard(str(child_session_id or ""))
+    except Exception:
+        pass
+
+
+def terminal_payload(kwargs, ctx, settings_factory) -> dict | None:
+    """Terminal-mode capture, from the once-per-turn pre_llm_call hook.
+
+    Only the terminal surface (no platform name, ``cli``, ``local``) —
+    messaging platforms are handled by ``pre_gateway_dispatch``, and firing
+    both would capture a Slack message twice. Skips slash commands, cron
+    runs, and subagent sessions, whose user messages are prompts rather
+    than human speech.
+    """
+    try:
+        platform = str(kwargs.get("platform") or "").strip().lower()
+        if platform not in ("", "cli", "local", "terminal"):
+            return None
+        session_id = str(kwargs.get("session_id") or "")
+        if session_id and session_id in _SUBAGENT_SESSIONS:
+            return None
+        if gates.in_unattended_cron(ctx):
+            return None
+        message = kwargs.get("user_message")
+        if not isinstance(message, str):
+            return None
+        text = message.strip()
+        if len(text) < 3 or text.startswith("/"):
+            return None
+        settings = settings_factory()
+        eligible, cfg, _reason = capture_eligible(ctx, settings)
+        if not eligible:
+            return None
+        if "terminal" not in cfg["platforms"] and "all" not in cfg["platforms"]:
+            return None
+        collection = resolve_capture_collection(cfg, settings)
+        source = cfg["terminal_source"] or str(settings.get("owner") or "").strip() or "terminal"
+        return {
+            "platform": "terminal",
+            "chat_id": session_id,
+            "message_id": "",
+            "user_name": source,
+            "text": text,
+            "collection": collection,
+            "permalink": "",
+            "max_claims": cfg["max_claims"],
+            "dupe_distance": cfg["dupe_distance"],
+        }
+    except Exception:
+        return None
 
 
 def _platform_value(source) -> str:
