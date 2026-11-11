@@ -352,24 +352,26 @@ def classify_agent_answer(llm, text: str) -> dict:
 def semantic_duplicate(service, collection: str, text: str, threshold: float):
     """Vector near-duplicate check against existing claims.
 
-    Returns ``(match, best_distance, error)``. ``match`` is the closest claim
-    at or below ``threshold`` (cosine distance, lower = closer), or None.
-    On a search failure ``error`` is set and the check says nothing: the
-    caller publishes rather than dropping a real claim (fail-open).
+    Returns ``{match, nearest, distance, error}``. ``match`` is the closest
+    claim at or below ``threshold`` (cosine distance, lower = closer), or
+    None. ``nearest`` is that same claim when matched, otherwise the closest
+    claim seen regardless of threshold — the audit trail for borderline
+    keeps. On a search failure ``error`` is set and the check says nothing:
+    the caller publishes rather than dropping a real claim (fail-open).
     """
+    result = {"match": None, "nearest": None, "distance": None, "error": None}
     try:
         found = service.call(
             "search_claims",
             {"collection": collection, "text": text, "method": "vector", "limit": 5},
         )
-    except PluginError as exc:
-        return None, None, str(exc)
     except Exception as exc:
-        return None, None, str(exc)
+        result["error"] = str(exc)
+        return result
     items = found.get("items") if isinstance(found, dict) else None
     if not isinstance(items, list):
-        return None, None, "unreadable search result"
-    best = None
+        result["error"] = "unreadable search result"
+        return result
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -377,11 +379,12 @@ def semantic_duplicate(service, collection: str, text: str, threshold: float):
             distance = float(item.get("distance"))
         except (TypeError, ValueError):
             continue
-        if best is None or distance < best[1]:
-            best = (item, distance)
-    if best is not None and best[1] <= threshold:
-        return best[0], best[1], None
-    return None, (best[1] if best is not None else None), None
+        if result["nearest"] is None or distance < result["distance"]:
+            result["nearest"] = item
+            result["distance"] = distance
+    if result["nearest"] is not None and result["distance"] <= threshold:
+        result["match"] = result["nearest"]
+    return result
 
 
 def claim_events(
@@ -419,29 +422,37 @@ def claim_events(
                 {"kind": "claim-duplicate", "via": "exact", "text": text, "at": now_iso()},
             )
             continue
-        match, best_distance, error = semantic_duplicate(service, collection, text, dupe_distance)
-        if error is not None:
+        check = semantic_duplicate(service, collection, text, dupe_distance)
+        if check["error"] is not None:
             state.append_jsonl(
                 "capture.jsonl",
-                {"kind": "dedupe-unavailable", "error": error, "at": now_iso()},
+                {"kind": "dedupe-unavailable", "error": check["error"], "at": now_iso()},
             )
-        elif match is not None:
+        elif check["match"] is not None:
             state.append_jsonl(
                 "capture.jsonl",
                 {
                     "kind": "claim-duplicate",
                     "via": "semantic",
-                    "matched": match.get("id"),
-                    "distance": best_distance,
+                    "matched": check["match"].get("id"),
+                    "distance": check["distance"],
                     "text": text,
                     "at": now_iso(),
                 },
             )
             continue
         else:
+            nearest = check["nearest"] or {}
             state.append_jsonl(
                 "capture.jsonl",
-                {"kind": "claim-kept", "best_distance": best_distance, "at": now_iso()},
+                {
+                    "kind": "claim-kept",
+                    "text": text,
+                    "nearest": nearest.get("id"),
+                    "nearest_text": str(nearest.get("text") or "")[:120],
+                    "best_distance": check["distance"],
+                    "at": now_iso(),
+                },
             )
         try:
             runtime.claim_gate(text, claim.get("rebuttal"))
