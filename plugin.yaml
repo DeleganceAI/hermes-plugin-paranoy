@@ -58,6 +58,8 @@ provides_hooks:
   - pre_gateway_dispatch
   - subagent_start
   - subagent_stop
+provides_middleware:
+  - llm_execution
 config_schema:
   capture_enabled:
     type: bool
