@@ -7,7 +7,7 @@ import logging
 import re
 from pathlib import Path
 
-from . import gates, schemas, state
+from . import capture, gates, schemas, state
 from .client import ParanoyClient, PluginError
 from .runtime import now_iso
 from .signing import SecretError, generate_and_store, load_secret_hex
@@ -166,6 +166,30 @@ def register(ctx):
     ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("post_tool_call", post_tool_call)
 
+    def pre_gateway_dispatch(**kwargs):
+        """Capture human messages off the turn's critical path. Never alters flow."""
+        try:
+            payload = capture.inbound_payload(
+                kwargs.get("event"), kwargs.get("gateway"), ctx, settings_factory
+            )
+        except Exception:
+            payload = None
+        if payload is not None:
+            capture.start_inbound_thread(payload, ctx, settings_factory, service_factory)
+        return None
+
+    ctx.register_hook("pre_gateway_dispatch", pre_gateway_dispatch)
+
+    def llm_execution_middleware(**kwargs):
+        return capture.llm_execution(
+            ctx=ctx,
+            settings_factory=settings_factory,
+            service_factory=service_factory,
+            **kwargs,
+        )
+
+    ctx.register_middleware("llm_execution", llm_execution_middleware)
+
     def make_check(tool_name):
         def check_fn() -> bool:
             try:
@@ -176,7 +200,7 @@ def register(ctx):
         return check_fn
 
     def save_setting(key, value):
-        ctx.set_config(key, value)
+        gates.save_setting(ctx, key, value)
 
     for spec in (
         *read.build(service_factory, settings_factory),

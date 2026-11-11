@@ -218,6 +218,7 @@ Every slash command has an agent tool, and both run the same code. `keygen` is t
 | `/paranoy job create` | `paranoy_schedule_job` with `action: "create"` | Yes |
 | `/paranoy job list` | `paranoy_schedule_job` with `action: "list"` | No |
 | `/paranoy job remove` | `paranoy_schedule_job` with `action: "remove"` | Yes |
+| `/paranoy capture [status\|on\|off\|<key> <value>]` | `paranoy_set_capture` | Yes, when a value changes |
 | `hermes paranoy keygen` | none | Terminal only |
 
 "Yes" follows `require_publish_approval`. In an unattended cron run, collection, mode, and roles changes are refused unless `allow_unattended_writes` is on, and job create and remove are always refused. The agent tools for these are visible in every mode once a key is stored, with or without a pinned collection. `paranoy_set_collection` also checks membership on the server and refuses a collection the key is not in. A mode change can make write tools visible, so the result lists which tools show up on the next turn.
@@ -234,6 +235,29 @@ hermes paranoy profile publish
 `hermes paranoy profile` takes the same `name`, `about`, and `publish` arguments as the slash command.
 
 `keygen` creates a key, stores the hex with Hermes, and prints only the npub. `whoami` and `status` also print the npub, never the secret.
+
+## Conversation capture
+
+Capture turns the conversation itself into ledger records, without the agent deciding anything per message. It is **off by default**; turning it on is your approval for automatic publishing, so per-write approval prompts do not apply to it. Capture needs a stored key, mode `contributor` or `ledger`, and a collection (the pinned one, or `capture_collection`).
+
+- **Human messages** on the configured platforms (default `slack,terminal`) go through a content gate: only messages with concrete, observational content are recorded. A gate pass publishes the message verbatim as evidence (`source` = the sender's display name, `retrieved_via` = the platform, a permalink as `url` when `capture_permalink_base` is set) plus any contestable claims it contains, in strong form with a rebuttal line. Each candidate claim is checked against the collection: exact text matches and vector near-duplicates (within `capture_dupe_distance`) are skipped. Small talk, acknowledgments, questions, and decisions record nothing. Capture happens off the turn's path, in the background, and duplicates (retries, re-sent messages) are skipped.
+- **The agent's final answer** gets the same claim gate: contestable world-claims are extracted and published as standalone claims. The answer itself is never evidence. The answer you see is then rewritten once against the claims retrieved from the collection (with their linked evidence quotes), so it stays consistent with the ledger and cites it.
+
+If the ledger cannot be reached, the answer still arrives, with one appended line saying the ledger was unreachable and the answer was not checked. A turn aborted mid-flight is left alone. Links and contradictions are never created by capture: other workers find them.
+
+| Setting | Default | Role |
+|---|---|---|
+| `capture_enabled` | `false` | Master switch |
+| `capture_extract` | `true` | Claim extraction from final answers |
+| `capture_rewrite` | `true` | Retrieval + rewrite pass |
+| `capture_platforms` | `slack,terminal` | `all`, or a comma list. `cli` and an empty platform count as `terminal` |
+| `capture_collection` | pinned `collection` | Where capture publishes |
+| `capture_permalink_base` | empty | e.g. `https://yourteam.slack.com`. Empty means no `url` on evidence |
+| `capture_max_claims` | `3` | Cap per message or answer |
+| `capture_retrieval_limit` | `8` | Claims pulled for the rewrite |
+| `capture_dupe_distance` | `0.15` | Vector near-duplicate threshold for new claims. Verbatim ≈ 0.06, paraphrase 0.09–0.14, related-but-different 0.18+; every decision is journaled |
+
+Turn capture on and inspect it with `/paranoy capture on`, `/paranoy capture status`, `/paranoy capture <key> <value>`, or ask the agent with `paranoy_set_capture` (a person approves each change). Every capture action and skip is journaled to `capture.jsonl` under the plugin data directory, so you can see exactly what the gate decided. Capture settings are stored in the plugin's local state, with `plugins.entries.paranoy.capture_*` in `config.yaml` as a fallback for defaults.
 
 ## Cadence jobs
 

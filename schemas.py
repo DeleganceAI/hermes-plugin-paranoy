@@ -90,6 +90,7 @@ CONFIG_TOOLS = (
     "paranoy_set_collection",
     "paranoy_set_mode",
     "paranoy_set_roles",
+    "paranoy_set_capture",
     "paranoy_whoami",
 )
 # Builds Hermes cron jobs for one role. Visible once a key is stored.
@@ -140,7 +141,7 @@ APPROVAL_WRITES = frozenset(
 )
 # Setting changes a person approves, like a write. Nothing is sent to the server.
 CONFIG_APPROVAL = frozenset(
-    {"paranoy_set_collection", "paranoy_set_mode", "paranoy_set_roles"}
+    {"paranoy_set_collection", "paranoy_set_mode", "paranoy_set_roles", "paranoy_set_capture"}
 )
 # Every /paranoy subcommand and the agent tool that does the same thing.
 # keygen is the one terminal-only command: the agent never creates or
@@ -159,6 +160,7 @@ SLASH_TOOLS = {
     "job create": "paranoy_schedule_job",
     "job list": "paranoy_schedule_job",
     "job remove": "paranoy_schedule_job",
+    "capture": "paranoy_set_capture",
 }
 TERMINAL_ONLY = ("keygen",)
 ROLE_CONTENT = {
@@ -170,7 +172,7 @@ ROLE_CONTENT = {
     "Ponder": set(),
     "Ledger": set(),
 }
-HOOKS = ("pre_llm_call", "pre_tool_call", "post_tool_call")
+HOOKS = ("pre_llm_call", "pre_tool_call", "post_tool_call", "pre_gateway_dispatch")
 SKILLS = ("reader", "contributor", "admin", "ledger", "setup", "cadence")
 EVIDENCE_PAGE_CHARS = 20000
 EVIDENCE_CHAR_CAP = 200000
@@ -504,6 +506,21 @@ SCHEMAS = {
             )
         },
         ["roles"],
+    ),
+    "paranoy_set_capture": _schema(
+        "paranoy_set_capture",
+        "Show or change the conversation-capture settings, the same as /paranoy capture. "
+        "Capture files human messages as evidence and extracts claims from your own final "
+        "answers automatically, without asking per write, so a person approves every change. "
+        "Keys: capture_enabled, capture_extract, capture_rewrite, capture_platforms, "
+        "capture_collection, capture_permalink_base, capture_max_claims, "
+        "capture_retrieval_limit, capture_dupe_distance. Omit both arguments to read "
+        "the current settings. "
+        "Nothing is published to the server by this call itself.",
+        {
+            "key": _str("Capture setting key to change, from the list above."),
+            "value": _str("New value: on or off, a number, or a string."),
+        },
     ),
     "paranoy_schedule_job": _schema(
         "paranoy_schedule_job",

@@ -194,11 +194,25 @@ class RegisterTests(unittest.TestCase):
         plugin.state.use_data_dir(None)
         self.tmp.cleanup()
 
+    def test_settings_fall_back_to_plugin_state(self):
+        """Hermes 0.17 has no ctx.get_config/set_config; settings must still
+        round-trip through plugin-local state."""
+        class BareCtx:
+            pass
+
+        ctx = BareCtx()
+        plugin.gates.save_setting(ctx, "mode", "contributor")
+        plugin.gates.save_setting(ctx, "collection", "pump-study")
+        settings = plugin.gates.read_settings(ctx)
+        self.assertEqual(settings["mode"], "contributor")
+        self.assertEqual(settings["collection"], "pump-study")
+
     def test_register_loads_every_tool(self):
         class Ctx:
             def __init__(self):
                 self.tools = []
                 self.hooks = []
+                self.middleware = []
                 self.skills = []
                 self.commands = []
                 self.settings = {}
@@ -216,6 +230,9 @@ class RegisterTests(unittest.TestCase):
 
             def register_hook(self, name, callback, **kwargs):
                 self.hooks.append((name, callback))
+
+            def register_middleware(self, kind, callback, **kwargs):
+                self.middleware.append((kind, callback))
 
             def register_tool(self, **kwargs):
                 self.tools.append(kwargs["name"])
