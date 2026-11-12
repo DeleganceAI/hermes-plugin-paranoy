@@ -1,7 +1,8 @@
 """Conversation capture: chat messages become standalone ledger records.
 
-Two paths. Human messages are gated and filed at ``pre_gateway_dispatch``,
-off the turn's critical path. The assistant's final answer is handled inside
+Two paths. Human messages are gated and filed from ``post_gateway_admission``,
+which Hermes fires only after the sender has been admitted, off the turn's
+critical path. The assistant's final answer is handled inside
 ``llm_execution`` middleware: contestable world-claims are extracted and
 published, and the answer is rewritten once against claims retrieved from the
 collection.
@@ -476,7 +477,7 @@ def publish_records(service, settings: dict, events: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Path A — human messages (pre_gateway_dispatch, background thread)
+# Path A — human messages (post_gateway_admission, background thread)
 # ---------------------------------------------------------------------------
 
 # Sessions spawned by delegate/subagent runs: their "user messages" are
@@ -503,7 +504,7 @@ def terminal_payload(kwargs, ctx, settings_factory) -> dict | None:
     """Terminal-mode capture, from the once-per-turn pre_llm_call hook.
 
     Only the terminal surface (no platform name, ``cli``, ``local``) —
-    messaging platforms are handled by ``pre_gateway_dispatch``, and firing
+    messaging platforms are handled by ``post_gateway_admission``, and firing
     both would capture a Slack message twice. Skips slash commands, cron
     runs, and subagent sessions, whose user messages are prompts rather
     than human speech.
@@ -555,23 +556,42 @@ def terminal_payload(kwargs, ctx, settings_factory) -> dict | None:
         return None
 
 
-def _platform_value(source) -> str:
-    platform = getattr(source, "platform", None)
-    if platform is None:
+def _source_field(source, name, default=None):
+    if isinstance(source, dict):
+        return source.get(name, default)
+    return getattr(source, name, default)
+
+
+def _platform_value(value) -> str:
+    """Platform id from a string, an enum, or a source snapshot/object."""
+    if value is None or value == "":
         return ""
-    value = getattr(platform, "value", None)
-    return str(value if value is not None else platform)
+    if isinstance(value, str):
+        return value.strip().lower()
+    if isinstance(value, dict) or (not isinstance(value, (int, float)) and hasattr(value, "platform")):
+        return _platform_value(_source_field(value, "platform", None))
+    inner = getattr(value, "value", None)
+    return str(inner if inner is not None else value).strip().lower()
 
 
 def _authorized(gateway, source) -> bool:
-    """pre_gateway_dispatch fires before auth; re-check before filing anything."""
+    """Fail closed. A missing, false, or raising check is not permission.
+
+    ``post_gateway_admission`` does not pass a gateway: Hermes only fires it
+    for a sender it has already admitted, so the hook omits this call.
+    Any caller that does supply a gateway must have a working
+    ``_is_user_authorized``. Treating a missing method as allowed is what
+    let an unpaired sender get signed and published.
+    """
+    if gateway is None:
+        return False
     check = getattr(gateway, "_is_user_authorized", None)
     if not callable(check):
-        return True
+        return False
     try:
         return bool(check(source))
     except Exception:
-        return True
+        return False
 
 
 def build_permalink(cfg: dict, platform: str, chat_id: str, message_id: str) -> str:
@@ -583,39 +603,52 @@ def build_permalink(cfg: dict, platform: str, chat_id: str, message_id: str) -> 
     return f"{cfg['permalink_base']}/archives/{chat_id}/p{ts.replace('.', '')}"
 
 
-def inbound_payload(event, gateway, ctx, settings_factory) -> dict | None:
-    """Eligibility for one inbound message. Returns the job payload or None."""
+def inbound_payload(kwargs, ctx, settings_factory) -> dict | None:
+    """Eligibility for one admitted message. Returns the job payload or None.
+
+    ``kwargs`` is the ``post_gateway_admission`` payload. Hermes passes
+    ``source`` (a ``SessionSource.to_dict()`` snapshot), ``text``,
+    ``message_id``, ``platform``, and ``session_key``, and no gateway.
+    The hook only runs after the sender has been admitted, so a missing
+    gateway is that admission, not a missing check.
+
+    If ``gateway`` is present, ``_is_user_authorized`` must exist and return
+    true. A missing method or any error refuses capture.
+    """
     try:
-        if event is None or getattr(event, "internal", False):
+        if not isinstance(kwargs, dict):
             return None
-        if event.is_command():
+        text = str(kwargs.get("text") or "").strip()
+        if len(text) < 3 or text.startswith("/"):
             return None
-        text = str(event.text or "").strip()
-        if len(text) < 3:
+        source = kwargs.get("source")
+        if source is None or bool(_source_field(source, "is_bot", False)):
             return None
-        source = event.source
-        if source is None or getattr(source, "is_bot", False):
-            return None
-        if not _authorized(gateway, source):
+        # Present gateway: defense in depth, fail closed. Absent key: Hermes
+        # already admitted this sender by firing the hook.
+        if "gateway" in kwargs and not _authorized(kwargs.get("gateway"), source):
             return None
         settings = settings_factory()
         eligible, cfg, _reason = capture_eligible(ctx, settings)
         if not eligible:
             return None
-        platform = _platform_value(source)
+        platform = _platform_value(kwargs.get("platform")) or _platform_value(source)
         if not platform_allowed(cfg, platform):
             return None
+        message_id = kwargs.get("message_id")
+        if message_id in (None, ""):
+            message_id = _source_field(source, "message_id", "") or ""
+        chat_id = str(_source_field(source, "chat_id", "") or "")
+        message_id = str(message_id or "")
         collection = resolve_capture_collection(cfg, settings)
         return {
             "platform": platform,
-            "chat_id": str(getattr(source, "chat_id", "") or ""),
-            "message_id": str(getattr(event, "message_id", "") or ""),
-            "user_name": str(getattr(source, "user_name", "") or ""),
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "user_name": str(_source_field(source, "user_name", "") or ""),
             "text": text,
             "collection": collection,
-            "permalink": build_permalink(
-                cfg, platform, str(getattr(source, "chat_id", "") or ""), str(getattr(event, "message_id", "") or "")
-            ),
+            "permalink": build_permalink(cfg, platform, chat_id, message_id),
             "max_claims": cfg["max_claims"],
             "dupe_distance": cfg["dupe_distance"],
         }

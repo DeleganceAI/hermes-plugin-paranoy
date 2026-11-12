@@ -317,7 +317,7 @@ class CaptureTestCase(unittest.TestCase):
         self.assertEqual(payload["user_name"], "Dustin")
 
     def test_terminal_payload_refuses_messaging_platforms(self):
-        # Slack is captured by pre_gateway_dispatch; firing here too would double-capture.
+        # Slack is captured by post_gateway_admission; firing here too would double-capture.
         self.assertIsNone(
             capture.terminal_payload(self.terminal_kwargs(platform="slack"), FakeCtx(), make_settings)
         )
@@ -587,19 +587,31 @@ class CaptureTestCase(unittest.TestCase):
         self.assertEqual(capture.build_permalink(cfg, "telegram", "C123", "1.2"), "")
 
     def test_inbound_payload_skips_commands_and_bots(self):
-        event = SimpleNamespace(
-            text="/paranoy status",
-            internal=False,
-            message_id="1",
-            source=SimpleNamespace(
-                platform=SimpleNamespace(value="slack"),
-                chat_id="C1",
-                user_name="D",
-                is_bot=False,
-            ),
+        source = {
+            "platform": "slack",
+            "chat_id": "C1",
+            "user_name": "D",
+            "is_bot": False,
+        }
+        self.assertIsNone(
+            capture.inbound_payload(
+                {"source": source, "text": "/paranoy status", "message_id": "1", "platform": "slack"},
+                FakeCtx(),
+                make_settings,
+            )
         )
-        event.is_command = lambda: True
-        self.assertIsNone(capture.inbound_payload(event, None, FakeCtx(), make_settings))
+        self.assertIsNone(
+            capture.inbound_payload(
+                {
+                    "source": {**source, "is_bot": True},
+                    "text": "I talked to customer X and they said they'd build it themselves.",
+                    "message_id": "1",
+                    "platform": "slack",
+                },
+                FakeCtx(),
+                make_settings,
+            )
+        )
 
     def test_slash_capture_toggles(self):
         capture.set_capture_setting("capture_enabled", False)
@@ -616,6 +628,140 @@ class CaptureTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PostGatewayAdmissionTest(unittest.TestCase):
+    """Messaging capture runs only after Hermes has admitted the sender."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        state.use_data_dir(Path(self._tmp.name))
+        enable_capture()
+        self._secret = plugin.signing.secret_configured
+        plugin.signing.secret_configured = lambda: True
+        self.addCleanup(setattr, plugin.signing, "secret_configured", self._secret)
+        self.started = []
+        original = capture.start_inbound_thread
+
+        def record(payload, *args, **kwargs):
+            self.started.append(payload)
+
+        capture.start_inbound_thread = record
+        self.addCleanup(setattr, capture, "start_inbound_thread", original)
+
+    def admission_hook(self):
+        class Ctx:
+            def __init__(self):
+                self.hooks = []
+                self.settings = {}
+
+            def register_skill(self, *args, **kwargs):
+                return None
+
+            def register_command(self, *args, **kwargs):
+                return None
+
+            def register_cli_command(self, **kwargs):
+                return None
+
+            def register_hook(self, name, callback, **kwargs):
+                self.hooks.append((name, callback))
+
+            def register_middleware(self, *args, **kwargs):
+                return None
+
+            def register_tool(self, **kwargs):
+                return None
+
+            def get_config(self, key, default=None):
+                return self.settings.get(key, default)
+
+            def set_config(self, key, value):
+                self.settings[key] = value
+
+        ctx = Ctx()
+        plugin.register(ctx)
+        gates.save_setting(ctx, "mode", "contributor")
+        gates.save_setting(ctx, "collection", "tesseralia")
+        gates.save_setting(ctx, "roles", "Scout")
+        names = [name for name, _ in ctx.hooks]
+        self.assertIn("post_gateway_admission", names)
+        self.assertNotIn("pre_gateway_dispatch", names)
+        return dict(ctx.hooks)["post_gateway_admission"]
+
+    def admitted(self, **overrides):
+        """The kwargs Hermes passes to post_gateway_admission."""
+        kwargs = {
+            "session_key": "agent:main:slack:channel:C123",
+            "platform": "slack",
+            "source": {
+                "platform": "slack",
+                "chat_id": "C123",
+                "chat_name": None,
+                "chat_type": "channel",
+                "user_id": "U1",
+                "user_name": "Dustin",
+                "thread_id": None,
+                "chat_topic": None,
+            },
+            "message_id": "1731111111.000111",
+            "text": "I talked to customer X and they said they'd build it themselves.",
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    def test_admitted_sender_is_captured_and_hook_returns_none(self):
+        hook = self.admission_hook()
+        result = hook(**self.admitted())
+        self.assertIsNone(result)
+        self.assertEqual(len(self.started), 1)
+        payload = self.started[0]
+        self.assertEqual(payload["platform"], "slack")
+        self.assertEqual(payload["user_name"], "Dustin")
+        self.assertEqual(payload["chat_id"], "C123")
+        self.assertEqual(payload["message_id"], "1731111111.000111")
+        self.assertIn("customer X", payload["text"])
+        llm = FakeLlm(parsed={"has_content": True, "observation": True, "claims": []})
+        service = FakeService(plugin)
+        capture.run_inbound(payload, FakeCtx(llm), make_settings, lambda s: service)
+        evidence = next(event for event in service.published[0] if event["kind"] == 4701)
+        content = json.loads(evidence["content"])
+        self.assertEqual(content["source"], "Dustin")
+        self.assertTrue(evidence["sig"])
+
+        # A supplied gateway whose check returns true is captured as well.
+        allowed = SimpleNamespace(_is_user_authorized=lambda source: True)
+        result = hook(**self.admitted(message_id="1731111111.000222", gateway=allowed))
+        self.assertIsNone(result)
+        self.assertEqual(len(self.started), 2)
+        self.assertEqual(self.started[1]["message_id"], "1731111111.000222")
+
+    def test_unauthorized_sender_is_not_captured(self):
+        hook = self.admission_hook()
+        denied = SimpleNamespace(_is_user_authorized=lambda source: False)
+        result = hook(**self.admitted(gateway=denied))
+        self.assertIsNone(result)
+        self.assertEqual(self.started, [])
+
+    def test_missing_auth_check_does_not_capture(self):
+        hook = self.admission_hook()
+        result = hook(**self.admitted(gateway=SimpleNamespace()))
+        self.assertIsNone(result)
+        self.assertEqual(self.started, [])
+        result = hook(**self.admitted(gateway=None))
+        self.assertIsNone(result)
+        self.assertEqual(self.started, [])
+
+    def test_auth_check_error_does_not_capture(self):
+        hook = self.admission_hook()
+
+        def explode(source):
+            raise RuntimeError("auth backend down")
+
+        result = hook(**self.admitted(gateway=SimpleNamespace(_is_user_authorized=explode)))
+        self.assertIsNone(result)
+        self.assertEqual(self.started, [])
 
 
 class InboundThreadContextTest(unittest.TestCase):

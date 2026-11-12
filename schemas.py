@@ -176,7 +176,7 @@ HOOKS = (
     "pre_llm_call",
     "pre_tool_call",
     "post_tool_call",
-    "pre_gateway_dispatch",
+    "post_gateway_admission",
     "subagent_start",
     "subagent_stop",
 )
