@@ -167,7 +167,6 @@ SLASH_TOOLS = {
     "capture": "paranoy_set_capture",
     "beliefs": "paranoy_surface_beliefs",
     "beliefs status": "paranoy_surface_beliefs",
-    "beliefs consent": "paranoy_surface_beliefs",
     "beliefs scan": "paranoy_surface_beliefs",
     "beliefs propose": "paranoy_surface_beliefs",
     "beliefs approve": "paranoy_surface_beliefs",
@@ -568,8 +567,7 @@ SCHEMAS = {
     "paranoy_surface_beliefs": _schema(
         "paranoy_surface_beliefs",
         "Surface beliefs from the current conversation, the same as /paranoy beliefs. "
-        "action status shows whether the user has consented. action consent with consent true "
-        "records that consent. action scan reads the current Hermes session, or text the user "
+        "action status lists pending proposals. Asking for a scan is the user's go-ahead. action scan reads the current Hermes session, or text the user "
         "pasted, and returns the excerpts plus claim-shaped statements. It does not judge truth, "
         "tone, or plausibility, and it sends nothing. action propose attaches underlying "
         "assumptions. Those are your inference, not the user's words, and each quote must appear "
@@ -578,8 +576,7 @@ SCHEMAS = {
         "A public collection is refused. Claims are present-tense world propositions: one scoped "
         "claim, no can or may, not normative, and not a prediction of the future.",
         {
-            "action": _str("status, consent, scan, propose, or approve."),
-            "consent": _bool("Explicit consent to read conversation history locally. Required with action consent."),
+            "action": _str("status, scan, propose, or approve."),
             "text": _str("Conversation text to scan when session history is not available. Not sent anywhere."),
             "candidates": {
                 "type": "array",

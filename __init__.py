@@ -81,8 +81,8 @@ def register(ctx):
     ctx.register_command(
         "paranoy",
         handler=slash,
-        description="Paranoy status, collection, mode, roles, whoami, profile, jobs, capture, and beliefs",
-        args_hint="status|collection|mode|roles|whoami|profile [name|about|publish]|job [create|list|remove]|capture [status|on|off]|beliefs [consent|scan|approve]",
+        description="Paranoy status, collection, mode, roles, whoami, profile, jobs, and beliefs",
+        args_hint="status|collection|mode|roles|whoami|profile [name|about|publish]|job [create|list|remove]|beliefs [scan|approve]",
     )
 
     def keygen() -> str | None:

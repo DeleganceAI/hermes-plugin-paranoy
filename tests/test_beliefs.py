@@ -44,18 +44,11 @@ class ScanTests(KeyedTestCase):
         beliefs.use_history_reader(None)
         super().tearDown()
 
-    def test_scan_does_not_read_until_consent(self):
-        def reader(session_id):
-            raise AssertionError(session_id)
-
-        beliefs.use_history_reader(reader)
+    def test_turn_text_is_never_written_to_disk(self):
         beliefs.remember_turn(
             {"session_id": "s1", "user_message": PUMP, "conversation_history": [{"role": "user", "content": PUMP}]}
         )
         self.assertNotIn("pump", json.dumps(plugin.state.load_state()))
-        with self.assertRaises(PluginError) as caught:
-            beliefs.scan(session_id="s1")
-        self.assertIn("Consent", str(caught.exception))
 
     def test_session_scan_lists_excerpts_and_a_neutral_candidate(self):
         seen = []
@@ -69,7 +62,6 @@ class ScanTests(KeyedTestCase):
             ]
 
         beliefs.use_history_reader(reader)
-        beliefs.record_consent(True)
         payload = beliefs.scan(session_id="sess-1")
         self.assertEqual(seen, ["sess-1"])
         self.assertEqual(
@@ -86,7 +78,6 @@ class ScanTests(KeyedTestCase):
         self.assertIn(PUMP, stored)
 
     def test_pasted_transcript_keeps_user_lines_and_redacts_a_secret(self):
-        beliefs.record_consent(True)
         secret = "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqs8k4y3"
         text = "\n".join(
             [
@@ -114,7 +105,6 @@ class ScanTests(KeyedTestCase):
         root = logging.getLogger()
         root.addHandler(handler)
         try:
-            beliefs.record_consent(True)
             beliefs.remember_turn(
                 {
                     "session_id": "s2",
@@ -162,7 +152,6 @@ class FileTests(KeyedTestCase):
         return service
 
     def _propose(self):
-        beliefs.record_consent(True)
         beliefs.scan(PUMP)
         return beliefs.propose(
             [
@@ -176,7 +165,6 @@ class FileTests(KeyedTestCase):
         )
 
     def test_a_quote_outside_the_excerpts_is_refused(self):
-        beliefs.record_consent(True)
         beliefs.scan(PUMP)
         result = beliefs.propose(
             [
@@ -241,13 +229,8 @@ class FileTests(KeyedTestCase):
         self.assertTrue(
             gates.tool_visible({"mode": "reader", "key_configured": True, "collection": ""}, "paranoy_surface_beliefs")
         )
-        consent = gates.pre_tool_directive(Ctx(mode="reader"), "paranoy_surface_beliefs", {"action": "consent"})
-        self.assertEqual(consent["action"], "block")
-        allowed = gates.pre_tool_directive(
-            Ctx(mode="reader"), "paranoy_surface_beliefs", {"action": "consent", "consent": True}
-        )
-        self.assertEqual(allowed["action"], "approve")
-        self.assertIn("Nothing is sent", allowed["message"])
+        removed = gates.pre_tool_directive(Ctx(mode="reader"), "paranoy_surface_beliefs", {"action": "consent"})
+        self.assertEqual(removed["action"], "block")
         self.assertIsNone(
             gates.pre_tool_directive(Ctx(mode="reader"), "paranoy_surface_beliefs", {"action": "scan", "text": PUMP})
         )
@@ -261,10 +244,9 @@ class FileTests(KeyedTestCase):
         )
         self.assertEqual(cron["action"], "block")
 
-    def test_slash_consent_scan_and_approve(self):
+    def test_slash_scan_and_approve(self):
         ctx = Ctx(mode="reader", collection="pump-notes")
-        self.assertIn("consent: no", gates.slash_result(ctx, "beliefs"))
-        self.assertIn("Consent recorded", gates.slash_result(ctx, "beliefs consent"))
+        self.assertIn("pending: (none)", gates.slash_result(ctx, "beliefs"))
         scanned = gates.slash_result(ctx, "beliefs scan " + PUMP)
         self.assertIn("Excerpts read", scanned)
         self.assertIn(PUMP, scanned)

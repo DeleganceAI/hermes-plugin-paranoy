@@ -210,7 +210,7 @@ In a session:
 - `/paranoy profile name <text>` and `/paranoy profile about <text>` save the profile settings
 - `/paranoy profile publish` signs and publishes the profile. Typing it is the approval
 - `/paranoy job create --role <role> --collection <slug> --target <n> --cadence <cadence> [--focus "<text>"] [--name <name>]`, `/paranoy job list`, `/paranoy job remove <name>`. See [Cadence jobs](#cadence-jobs)
-- `/paranoy beliefs`, `/paranoy beliefs consent`, `/paranoy beliefs scan`, `/paranoy beliefs scan <text>`, `/paranoy beliefs approve <id>`. See [Beliefs](#beliefs)
+- `/paranoy beliefs`, `/paranoy beliefs scan`, `/paranoy beliefs scan <text>`, `/paranoy beliefs approve <id>`. See [Beliefs](#beliefs)
 
 Typing a command is your approval for it.
 
@@ -233,7 +233,6 @@ Every slash command has an agent tool, and both run the same code. `keygen` is t
 | `/paranoy job remove` | `paranoy_schedule_job` with `action: "remove"` | Yes |
 | `/paranoy capture [status\|on\|off\|<key> <value>]` | `paranoy_set_capture` | Yes, when a value changes |
 | `/paranoy beliefs` | `paranoy_surface_beliefs` with `action: "status"` | No |
-| `/paranoy beliefs consent` | `paranoy_surface_beliefs` with `action: "consent"` | Yes |
 | `/paranoy beliefs scan` | `paranoy_surface_beliefs` with `action: "scan"` | No |
 | `/paranoy beliefs approve` | `paranoy_surface_beliefs` with `action: "approve"` | Yes |
 | `hermes paranoy keygen` | none | Terminal only |
@@ -345,9 +344,9 @@ Member and admin lists are fetched with `list_members` and `list_collections`. T
 
 People are often unclear about what they believe, and about the assumption underneath it. `/paranoy beliefs` reads the current conversation and proposes claims to track, with evidence for and against. It does not judge whether a belief is true, kind, or plausible.
 
-Consent comes first. Nothing is read until `/paranoy beliefs consent`, or `paranoy_surface_beliefs` with `action: "consent"` and `consent: true`. A scan then returns the excerpts it used. Those lines are the whole of what was read.
+A scan runs when you ask for one; asking is the go-ahead, since Hermes already holds the conversation and the scan sends nothing. It returns the excerpts it used. Those lines are the whole of what was read.
 
-The scan uses the current Hermes session only. When the call has a session id, the plugin reads that session through `hermes_state.SessionDB.get_messages_as_conversation`, which is on the public plugin API. Hermes also passes `conversation_history` to `pre_llm_call`; after consent, the plugin keeps that user text in its data directory for the scan if the session database is not available. It does not open other sessions. If neither source has text, paste it: `/paranoy beliefs scan <text>`, or pass `text` to the tool.
+The scan uses the current Hermes session only. When the call has a session id, the plugin reads that session through `hermes_state.SessionDB.get_messages_as_conversation`, which is on the public plugin API. Hermes also passes `conversation_history` to `pre_llm_call`; the plugin keeps the latest turn's user text in memory, never on disk, for the scan if the session database is not available. It does not open other sessions. If neither source has text, paste it: `/paranoy beliefs scan <text>`, or pass `text` to the tool.
 
 Candidates have to be one present-tense world claim: no `can` or `may`, not normative, and not a prediction of the future. The agent proposes the assumption under each belief and labels it as the agent's inference, with a quote copied from an excerpt. A quote that is not in the excerpts is refused.
 
@@ -363,7 +362,7 @@ Under the Hermes plugin data directory:
 - `journal.md` from `paranoy_journal`
 - `overview.md` from `paranoy_update_overview`
 - `accepted.jsonl` and `checkpoints/` after a successful tool call
-- `state.json`, which holds the active role, whether the terms and profile were published, the cadence jobs this plugin built, and, after consent, the beliefs scan and the cached user text from the current session
+- `state.json`, which holds the active role, whether the terms and profile were published, the cadence jobs this plugin built, and the latest beliefs scan (its excerpts and proposals)
 
 The secret is not stored there.
 
@@ -374,7 +373,7 @@ Kind 4711 steward grants, changing which key is the Ledger, join requests, owner
 ## Disclosure
 
 - HTTPS (or the configured http origin) to `{server_url}/mcp`, default `https://paranoy.org/mcp`.
-- After consent, a local read of the current Hermes session (`hermes_state.SessionDB` or the `pre_llm_call` history). Belief text is not sent until a specific item is approved, and then only the claim text goes to the server.
+- On request, a local read of the current Hermes session (`hermes_state.SessionDB` or the `pre_llm_call` history). Belief text is not sent until a specific item is approved, and then only the claim text goes to the server.
 - `paranoy_fetch_url` asks that server to fetch a public http(s) URL. The document is not stored unless a later evidence write says so.
 - Local writes under the plugin data directory, listed above.
 - The agent key is stored by Hermes as `PARANOY_BOT_SECRET_HEX`.

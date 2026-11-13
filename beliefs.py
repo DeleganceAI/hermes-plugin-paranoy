@@ -1,19 +1,19 @@
 """Surface the user's beliefs from the current conversation. Local until approved.
 
-History is read only after explicit consent. The sources are the current
-Hermes session, not every past session:
+Asking for a scan is the user's go-ahead: Hermes already holds this
+conversation, and a scan sends nothing. The sources are the current Hermes
+session, not every past session:
 
 - ``hermes_state.SessionDB.get_messages_as_conversation(session_id)`` when the
   tool or slash command is given a session id. ``hermes_state`` is on the
   public plugin API list.
-- The ``conversation_history`` Hermes passes to ``pre_llm_call``, cached in
-  the plugin data directory after consent, when the session database is
-  unavailable.
+- The ``conversation_history`` Hermes passes to ``pre_llm_call``, kept in
+  memory for the latest turn only, when the session database is unavailable.
 - Text the user pastes into the command or tool.
 
 Excerpts are returned with the scan so the user can see exactly what was
 read. Nothing is published until a specific proposal is approved, and the
-destination is a private collection this key owns. Conversation text is
+destination is a private collection this key owns. Scanned excerpts are
 written only under the plugin data directory.
 """
 
@@ -25,12 +25,14 @@ import re
 
 from . import state
 from .client import PluginError, redact
-from .runtime import claim_gate, now_iso, publish, row_role
+from .runtime import claim_gate, publish, row_role
 
 logger = logging.getLogger(__name__)
 
 _session_id = contextvars.ContextVar("paranoy_beliefs_session", default="")
 _READER = None
+# ponytail: latest turn only, in memory; never written to disk.
+_LAST_TURN: list[str] = []
 
 USER_MESSAGE_CAP = 30
 EXCERPT_CHARS = 1500
@@ -79,44 +81,19 @@ def use_history_reader(reader) -> None:
     _READER = reader
 
 
-def consented() -> bool:
-    return bool(state.load_state().get("beliefs_consent"))
-
-
-def record_consent(explicit: bool) -> dict:
-    if not explicit:
-        raise PluginError(
-            "Consent is required before a beliefs scan. "
-            "Pass consent true, or type /paranoy beliefs consent."
-        )
-    stamp = now_iso()
-    state.update_state(beliefs_consent=True, beliefs_consent_at=stamp)
-    return {
-        "consent": True,
-        "at": stamp,
-        "note": "Conversation text stays in the plugin data directory until you approve one item.",
-    }
-
-
 def status() -> dict:
-    saved = state.load_state()
     proposals = _proposals()
     pending = [item["id"] for item in proposals if item.get("status") == "pending"]
     return {
-        "consent": bool(saved.get("beliefs_consent")),
-        "consent_at": saved.get("beliefs_consent_at"),
         "pending": pending,
         "note": (
-            "Type /paranoy beliefs consent before the first scan. "
             "A scan reads the current session, or text you paste. Nothing is filed until you approve an item."
         ),
     }
 
 
 def remember_turn(kwargs: dict) -> None:
-    """Cache this turn's user text after consent. Never logs the text."""
-    if not consented():
-        return
+    """Keep this turn's user text in memory for a scan. Never logged or saved."""
     if not isinstance(kwargs, dict):
         return
     messages = _user_messages(kwargs.get("conversation_history"))
@@ -124,14 +101,8 @@ def remember_turn(kwargs: dict) -> None:
     if current:
         messages.append(current)
     messages = [redact(text) for text in _cap_messages(messages)]
-    if not messages:
-        return
-    state.update_state(
-        beliefs_history={
-            "session_id": str(kwargs.get("session_id") or ""),
-            "messages": messages,
-        }
-    )
+    if messages:
+        _LAST_TURN[:] = messages
 
 
 def claim_problems(text: str) -> list[str]:
@@ -165,17 +136,12 @@ def claim_problems(text: str) -> list[str]:
 
 def scan(text: str | None = None, session_id: str | None = None) -> dict:
     """Read local history and list claim-shaped statements. Sends nothing."""
-    if not consented():
-        raise PluginError(
-            "Consent is required before a beliefs scan. "
-            "Type /paranoy beliefs consent, or call paranoy_surface_beliefs with action consent and consent true."
-        )
     excerpts = _collect_excerpts(text, session_id)
     if not excerpts:
         raise PluginError(
             "No conversation text was available. Paste it with /paranoy beliefs scan <text>, "
             "or pass text to paranoy_surface_beliefs. "
-            "The scan reads the current Hermes session only, after consent."
+            "The scan reads the current Hermes session only."
         )
     candidates = _candidates(excerpts)
     payload = {
@@ -311,7 +277,6 @@ def private_collection(service, settings: dict, requested) -> str:
 
 def format_status(payload: dict) -> str:
     lines = [
-        f"consent: {'yes' if payload.get('consent') else 'no'}",
         "pending: " + (", ".join(payload.get("pending") or []) or "(none)"),
         payload.get("note") or "",
     ]
@@ -591,13 +556,7 @@ def _session_db_reader(session_id: str) -> list[dict]:
 
 
 def _hook_rows() -> list[str]:
-    saved = state.load_state().get("beliefs_history")
-    if not isinstance(saved, dict):
-        return []
-    messages = saved.get("messages")
-    if not isinstance(messages, list):
-        return []
-    return [str(item) for item in messages if str(item).strip()]
+    return [item for item in _LAST_TURN if item.strip()]
 
 
 def _user_messages(history) -> list[str]:

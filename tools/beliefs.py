@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from .. import beliefs, schemas
 from ..client import PluginError, dumps
-from ..gates import as_bool
 
 
 def surface(service, settings, args, session_id: str = "") -> dict:
@@ -13,8 +12,6 @@ def surface(service, settings, args, session_id: str = "") -> dict:
     try:
         if action == "status":
             return beliefs.status()
-        if action == "consent":
-            return beliefs.record_consent(as_bool(args.get("consent"), False))
         if action == "scan":
             return beliefs.scan(args.get("text"), session_id or None)
         if action == "propose":
@@ -23,7 +20,7 @@ def surface(service, settings, args, session_id: str = "") -> dict:
             return beliefs.approve(service, settings, args.get("ids"), args.get("collection"))
     finally:
         beliefs.reset_session(token)
-    raise PluginError("action must be status, consent, scan, propose, or approve.")
+    raise PluginError("action must be status, scan, propose, or approve.")
 
 
 def build(service_factory, settings_factory):

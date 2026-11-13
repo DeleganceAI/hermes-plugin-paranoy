@@ -11,9 +11,9 @@ description: >-
 
 Help the person see a belief they stated, and the assumption underneath it, then track evidence for and against that belief. Do not judge whether the belief is true, polite, or plausible. Relevance is the only filter: it is a world claim they are treating as so.
 
-## Consent and privacy
+## Privacy
 
-Do not scan until the person has consented. Ask them to type `/paranoy beliefs consent`, or call `paranoy_surface_beliefs` with `action: "consent"` and `consent: true`. A person approves that call. Consent is local. It does not send the conversation anywhere.
+Scan when the person asks what they believe or assume. Their asking is the go-ahead: you already have this conversation, and a scan sends nothing anywhere.
 
 The scan reads the current Hermes session only: the session database when this call has a session id, otherwise the history Hermes passed to the plugin on this conversation. It does not read other sessions. If that history is missing, ask the person to paste the text and pass it as `text`. Show them the excerpts the tool returns. Those are exactly the lines that were read.
 
@@ -33,4 +33,4 @@ Nothing is filed, and nothing is sent to Paranoy, until the person approves spec
 6. Show the compact result: the claim id, the assumptions, and the supporting and rebutting quotes the collection already has. Counts and quotes are retrieval aids, not verdicts. Say so when the collection has nothing either way.
 7. New evidence is a later step, through the contributor roles, and only if they ask. Do not invent a document.
 
-The person can do the consent, scan, and approve steps themselves with `/paranoy beliefs consent`, `/paranoy beliefs scan`, and `/paranoy beliefs approve <id>`.
+The person can do the scan and approve steps themselves with `/paranoy beliefs scan` and `/paranoy beliefs approve <id>`.

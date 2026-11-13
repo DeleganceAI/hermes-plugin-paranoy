@@ -411,27 +411,12 @@ def pre_tool_directive(ctx, tool_name, args) -> dict | None:
 
 def _belief_directive(ctx, settings: dict, args: dict) -> dict | None:
     action = str((args or {}).get("action") or "status").strip().lower()
-    if action not in {"status", "consent", "scan", "propose", "approve"}:
-        return {"action": "block", "message": "action must be status, consent, scan, propose, or approve."}
+    if action not in {"status", "scan", "propose", "approve"}:
+        return {"action": "block", "message": "action must be status, scan, propose, or approve."}
     if action == "status":
         return None
     if in_unattended_cron(ctx):
         return {"action": "block", "message": "Paranoy belief scans are not run from inside a cron job."}
-    if action == "consent":
-        if not as_bool(args.get("consent"), False):
-            return {
-                "action": "block",
-                "message": "Pass consent true to record consent. The scan does not run until then.",
-            }
-        if settings["require_publish_approval"]:
-            return {
-                "action": "approve",
-                "message": (
-                    "Approve reading the current conversation locally to surface beliefs. "
-                    "Nothing is sent, and nothing is filed."
-                ),
-            }
-        return None
     if action == "approve":
         ids = args.get("ids")
         shown = ids if isinstance(ids, str) else ", ".join(str(item) for item in (ids or []))
@@ -858,12 +843,6 @@ def _slash_beliefs(ctx, settings, argument, parts, service_factory):
     try:
         if sub == "status":
             return beliefs.format_status(beliefs.status())
-        if sub == "consent":
-            beliefs.record_consent(True)
-            return (
-                "Consent recorded. A scan reads the current session, or text you paste. "
-                "Nothing is sent yet."
-            )
         if sub == "scan":
             return beliefs.format_scan(beliefs.scan(rest or None))
         if sub == "approve":
@@ -875,7 +854,7 @@ def _slash_beliefs(ctx, settings, argument, parts, service_factory):
     except PluginError as exc:
         return str(exc)
     return (
-        "Usage: /paranoy beliefs [status|consent|scan [text]|approve <id>]\n"
+        "Usage: /paranoy beliefs [status|scan [text]|approve <id>]\n"
         "Nothing is filed until approve. The destination is a private collection you own."
     )
 
@@ -918,7 +897,7 @@ SLASH_COMMANDS = {
 }
 PROFILE_SUBCOMMANDS = ("", "name", "about", "publish")
 JOB_SUBCOMMANDS = ("", "create", "list", "remove")
-BELIEF_SUBCOMMANDS = ("", "status", "consent", "scan", "approve")
+BELIEF_SUBCOMMANDS = ("", "status", "scan", "approve")
 
 
 def slash_result(ctx, raw_args: str, service_factory=None, session_id: str | None = None) -> str:

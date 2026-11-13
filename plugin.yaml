@@ -1,5 +1,5 @@
 name: paranoy
-version: "0.4.1"
+version: "0.5.0"
 manifest_version: 2
 api_version: 1
 description: >
@@ -8,7 +8,7 @@ description: >
   allowed writes are signed in-process and sent to server_url/mcp over
   HTTPS. fetch_url asks that server to fetch public http(s) documents.
   Rejects, the Ponder journal, role checkpoints, and overview.md are written
-  under the Hermes plugin data directory. After consent, a beliefs scan
+  under the Hermes plugin data directory. On request, a beliefs scan
   reads the current Hermes session locally and files a claim only when the
   user approves that item, in a private collection.
 author: DeleganceAI
