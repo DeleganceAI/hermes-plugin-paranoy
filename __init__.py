@@ -182,19 +182,22 @@ def register(ctx):
     ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("post_tool_call", post_tool_call)
 
-    def pre_gateway_dispatch(**kwargs):
-        """Capture human messages off the turn's critical path. Never alters flow."""
+    def post_gateway_admission(**kwargs):
+        """Capture a message Hermes has already admitted. Return None so the turn runs.
+
+        The hook receives ``source``, ``text``, and ``message_id`` (plus
+        ``platform`` and ``session_key``). It must not return
+        ``{"action": "handled"}``.
+        """
         try:
-            payload = capture.inbound_payload(
-                kwargs.get("event"), kwargs.get("gateway"), ctx, settings_factory
-            )
+            payload = capture.inbound_payload(kwargs, ctx, settings_factory)
+            if payload is not None:
+                capture.start_inbound_thread(payload, ctx, settings_factory, service_factory)
         except Exception:
-            payload = None
-        if payload is not None:
-            capture.start_inbound_thread(payload, ctx, settings_factory, service_factory)
+            logger.warning("paranoy capture: post_gateway_admission failed", exc_info=True)
         return None
 
-    ctx.register_hook("pre_gateway_dispatch", pre_gateway_dispatch)
+    ctx.register_hook("post_gateway_admission", post_gateway_admission)
     ctx.register_hook("subagent_start", subagent_start)
     ctx.register_hook("subagent_stop", subagent_stop)
 
