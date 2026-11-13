@@ -186,8 +186,8 @@ def register(ctx):
         """Capture a message Hermes has already admitted. Return None so the turn runs.
 
         The hook receives ``source``, ``text``, and ``message_id`` (plus
-        ``platform`` and ``session_key``). It does not receive a gateway, and
-        it must not return ``{"action": "handled"}``.
+        ``platform`` and ``session_key``). It must not return
+        ``{"action": "handled"}``.
         """
         try:
             payload = capture.inbound_payload(kwargs, ctx, settings_factory)

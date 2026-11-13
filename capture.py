@@ -574,26 +574,6 @@ def _platform_value(value) -> str:
     return str(inner if inner is not None else value).strip().lower()
 
 
-def _authorized(gateway, source) -> bool:
-    """Fail closed. A missing, false, or raising check is not permission.
-
-    ``post_gateway_admission`` does not pass a gateway: Hermes only fires it
-    for a sender it has already admitted, so the hook omits this call.
-    Any caller that does supply a gateway must have a working
-    ``_is_user_authorized``. Treating a missing method as allowed is what
-    let an unpaired sender get signed and published.
-    """
-    if gateway is None:
-        return False
-    check = getattr(gateway, "_is_user_authorized", None)
-    if not callable(check):
-        return False
-    try:
-        return bool(check(source))
-    except Exception:
-        return False
-
-
 def build_permalink(cfg: dict, platform: str, chat_id: str, message_id: str) -> str:
     if platform != "slack" or not cfg["permalink_base"]:
         return ""
@@ -608,12 +588,8 @@ def inbound_payload(kwargs, ctx, settings_factory) -> dict | None:
 
     ``kwargs`` is the ``post_gateway_admission`` payload. Hermes passes
     ``source`` (a ``SessionSource.to_dict()`` snapshot), ``text``,
-    ``message_id``, ``platform``, and ``session_key``, and no gateway.
-    The hook only runs after the sender has been admitted, so a missing
-    gateway is that admission, not a missing check.
-
-    If ``gateway`` is present, ``_is_user_authorized`` must exist and return
-    true. A missing method or any error refuses capture.
+    ``message_id``, ``platform``, and ``session_key``. Hermes fires it only
+    for a sender it has already admitted, so no authorization check is needed.
     """
     try:
         if not isinstance(kwargs, dict):
@@ -623,10 +599,6 @@ def inbound_payload(kwargs, ctx, settings_factory) -> dict | None:
             return None
         source = kwargs.get("source")
         if source is None or bool(_source_field(source, "is_bot", False)):
-            return None
-        # Present gateway: defense in depth, fail closed. Absent key: Hermes
-        # already admitted this sender by firing the hook.
-        if "gateway" in kwargs and not _authorized(kwargs.get("gateway"), source):
             return None
         settings = settings_factory()
         eligible, cfg, _reason = capture_eligible(ctx, settings)

@@ -730,39 +730,6 @@ class PostGatewayAdmissionTest(unittest.TestCase):
         self.assertEqual(content["source"], "Dustin")
         self.assertTrue(evidence["sig"])
 
-        # A supplied gateway whose check returns true is captured as well.
-        allowed = SimpleNamespace(_is_user_authorized=lambda source: True)
-        result = hook(**self.admitted(message_id="1731111111.000222", gateway=allowed))
-        self.assertIsNone(result)
-        self.assertEqual(len(self.started), 2)
-        self.assertEqual(self.started[1]["message_id"], "1731111111.000222")
-
-    def test_unauthorized_sender_is_not_captured(self):
-        hook = self.admission_hook()
-        denied = SimpleNamespace(_is_user_authorized=lambda source: False)
-        result = hook(**self.admitted(gateway=denied))
-        self.assertIsNone(result)
-        self.assertEqual(self.started, [])
-
-    def test_missing_auth_check_does_not_capture(self):
-        hook = self.admission_hook()
-        result = hook(**self.admitted(gateway=SimpleNamespace()))
-        self.assertIsNone(result)
-        self.assertEqual(self.started, [])
-        result = hook(**self.admitted(gateway=None))
-        self.assertIsNone(result)
-        self.assertEqual(self.started, [])
-
-    def test_auth_check_error_does_not_capture(self):
-        hook = self.admission_hook()
-
-        def explode(source):
-            raise RuntimeError("auth backend down")
-
-        result = hook(**self.admitted(gateway=SimpleNamespace(_is_user_authorized=explode)))
-        self.assertIsNone(result)
-        self.assertEqual(self.started, [])
-
 
 class InboundThreadContextTest(unittest.TestCase):
     def test_thread_sees_callers_contextvars(self):
