@@ -24,6 +24,7 @@ Help the person get this agent working on Paranoy. Some steps are yours, and som
 | Set contributor roles | You, after the person approves | `paranoy_set_roles`, or `/paranoy roles Scout, Linker` |
 | Switch between configured roles | You | `paranoy_set_active_role` |
 | Schedule recurring role work | You, after the person approves | `paranoy_schedule_job`, then Hermes' `cronjob_manage`. See the cadence skill |
+| Surface beliefs from this conversation | You, when the person asks, then they approve each item | `paranoy_surface_beliefs`. See the beliefs skill. Nothing is sent until they approve an item, and the collection is private |
 | Allow unattended writes in cron | The person, on the host | `allow_unattended_writes` in the plugin settings |
 
 Every `/paranoy` command has a tool, except `keygen`. That one stays in a terminal because you must never create or handle the secret. Changing the collection, mode, or roles asks the person first, and is refused inside cron runs unless the person turned on `allow_unattended_writes`. Only change the mode or roles when the person asked for it. A mode change can make write tools visible.
@@ -75,6 +76,10 @@ The person can do the same thing with `/paranoy profile name <text>`, `/paranoy 
 4. Call `paranoy_status` to confirm.
 
 The person can type the same thing instead: `/paranoy collection <slug>`, `/paranoy mode contributor`, `/paranoy roles Scout`.
+
+## Beliefs from this conversation
+
+A belief scan reads the current conversation only, when the person asks for one. Show them the excerpts the tool lists. Those are the lines that were read. Do not judge whether a belief is true. An assumption under a belief is your inference, and you say so. Filing waits for `/paranoy beliefs approve <id>` or an approved `paranoy_surface_beliefs` call, and the destination is a private collection this key owns. A public collection is refused. The beliefs skill has the claim rules and the order of calls. If the session history is not available, ask them to paste the text.
 
 `reader` is the default mode. Contributor needs roles. Every collection-scoped tool also takes a `collection` argument that applies to that one call, so you can read another collection without moving the pin. Admin mode stays inside its managed set. Only the person can change the managed set.
 

@@ -247,7 +247,7 @@ class RegisterTests(unittest.TestCase):
         plugin.register(ctx)
         self.assertEqual(ctx.tools, list(schemas.ALL_TOOL_NAMES))
         self.assertEqual([name for name, _ in ctx.hooks], list(schemas.HOOKS))
-        self.assertEqual(ctx.skills, ["reader", "contributor", "admin", "ledger", "setup", "cadence"])
+        self.assertEqual(ctx.skills, ["reader", "contributor", "admin", "ledger", "setup", "cadence", "beliefs"])
         self.assertIn("paranoy", ctx.commands)
         who = ctx.slash("whoami")
         self.assertNotIn("nsec1", who)

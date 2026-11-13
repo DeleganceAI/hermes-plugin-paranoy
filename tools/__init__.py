@@ -1,5 +1,5 @@
 """Paranoy tool handlers."""
 
-from . import config, governance, jobs, profile, read, write
+from . import beliefs, config, governance, jobs, profile, read, write
 
-__all__ = ["config", "governance", "jobs", "profile", "read", "write"]
+__all__ = ["beliefs", "config", "governance", "jobs", "profile", "read", "write"]

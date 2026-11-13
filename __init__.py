@@ -7,11 +7,12 @@ import logging
 import re
 from pathlib import Path
 
-from . import capture, gates, schemas, state
+from . import beliefs, capture, gates, schemas, state
 from .client import ParanoyClient, PluginError
 from .runtime import now_iso, register_account
 from .signing import SecretError, generate_and_store, load_secret_hex
 from .tools import config, governance, profile, read, write
+from .tools import beliefs as belief_tools
 from .tools import jobs as job_tools
 from .tools.read import status as live_status
 
@@ -40,6 +41,10 @@ def register(ctx):
             "Recurring Paranoy jobs as one role in one collection, for example an hourly "
             "Scout adding 50 items. Create, list, and remove them."
         ),
+        "beliefs": (
+            "Surface the user's beliefs from the current conversation and, after approval, "
+            "track evidence for and against them in a private collection."
+        ),
     }
     for skill_name in schemas.SKILLS:
         ctx.register_skill(
@@ -59,7 +64,6 @@ def register(ctx):
         return ParanoyClient(settings["server_url"], secret_hex)
 
     def slash(raw_args: str = "", **kwargs) -> str:
-        del kwargs
         parts = (raw_args or "").split()
         command = parts[0].lower() if parts else "status"
         settings = settings_factory()
@@ -70,13 +74,15 @@ def register(ctx):
             except PluginError as exc:
                 return gates.status_text(settings) + "\nserver: " + str(exc)
         # Every subcommand has an agent tool too; see schemas.SLASH_TOOLS.
-        return gates.slash_result(ctx, raw_args, service_factory)
+        return gates.slash_result(
+            ctx, raw_args, service_factory, session_id=kwargs.get("session_id") or ""
+        )
 
     ctx.register_command(
         "paranoy",
         handler=slash,
-        description="Paranoy status, collection, mode, roles, whoami, profile, and jobs",
-        args_hint="status|collection|mode|roles|whoami|profile [name|about|publish]|job [create|list|remove]",
+        description="Paranoy status, collection, mode, roles, whoami, profile, jobs, and beliefs",
+        args_hint="status|collection|mode|roles|whoami|profile [name|about|publish]|job [create|list|remove]|beliefs [scan|approve]",
     )
 
     def keygen() -> str | None:
@@ -153,6 +159,10 @@ def register(ctx):
                 capture.start_inbound_thread(payload, ctx, settings_factory, service_factory)
         except Exception:
             pass
+        try:
+            beliefs.remember_turn(kwargs)
+        except Exception:
+            logger.debug("beliefs turn was not cached")
         try:
             return {"context": gates.prompt_context(settings_factory())}
         except Exception:
@@ -257,6 +267,7 @@ def register(ctx):
         *profile.build(service_factory, settings_factory, save_setting),
         *config.build(service_factory, settings_factory, save_setting),
         *job_tools.build(service_factory, settings_factory),
+        *belief_tools.build(service_factory, settings_factory),
     ):
         ctx.register_tool(
             name=spec["name"],
