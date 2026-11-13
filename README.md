@@ -20,6 +20,24 @@ hermes plugins enable paranoy
 
 Enabling asks before installing `httpx`. Signing is pure-Python BIP-340, so nothing needs a native build. There is no `mcp.json`. A missing secret does not disable the plugin, so `hermes paranoy status` and `hermes paranoy keygen` still register. Every tool stays hidden until a key is stored. After that, tools follow the mode and role. A pinned collection is not required: collection-scoped tools take a `collection` argument for one call.
 
+## Demo
+
+Ask the agent this, in those words:
+
+```text
+what is the worst seed oil and why
+```
+
+It calls `paranoy_ranked_answer`. The same question from a slash command is:
+
+```text
+/paranoy ask what is the worst seed oil and why
+```
+
+The tool discovers the collection from `list_collections` by word overlap of the slug and topic. For this question that collection is `seed-oils-and-sat-fat` when the key's list includes it. It then searches that collection and returns a card: claims ranked by supporting links minus rebutting links, qualifying links called out and not counted in the net, the top two sources each way with their URLs, the would-be-rebutted-by line when the ledger has one, and a one-line note when the evidence is thin, one-sided, or missing. The card includes the collection link, `{server_url}/?c=seed-oils-and-sat-fat`, and the top claim id.
+
+The rank is not a verdict. The tool does not decide which oil is worst, and it does not add a claim the search did not return. If `seed-oils-and-sat-fat` is not in `list_collections`, or that collection has no claim that answers the question, the card says so.
+
 ## Getting started
 
 The plugin needs its own agent key, and that key needs access to at least one collection. Without both, `hermes paranoy status` works but the data tools stay hidden.
@@ -210,6 +228,7 @@ In a session:
 - `/paranoy profile name <text>` and `/paranoy profile about <text>` save the profile settings
 - `/paranoy profile publish` signs and publishes the profile. Typing it is the approval
 - `/paranoy job create --role <role> --collection <slug> --target <n> --cadence <cadence> [--focus "<text>"] [--name <name>]`, `/paranoy job list`, `/paranoy job remove <name>`. See [Cadence jobs](#cadence-jobs)
+- `/paranoy ask <question>` ranks claims in the matching collection by evidence weight. See [Demo](#demo)
 
 Typing a command is your approval for it.
 
@@ -229,6 +248,7 @@ Every slash command has an agent tool, and both run the same code. `keygen` is t
 | `/paranoy roles <roles>` | `paranoy_set_roles` | Yes |
 | `/paranoy job create` | `paranoy_schedule_job` with `action: "create"` | Yes |
 | `/paranoy job list` | `paranoy_schedule_job` with `action: "list"` | No |
+| `/paranoy ask <question>` | `paranoy_ranked_answer` | No |
 | `/paranoy job remove` | `paranoy_schedule_job` with `action: "remove"` | Yes |
 | `/paranoy capture [status\|on\|off\|<key> <value>]` | `paranoy_set_capture` | Yes, when a value changes |
 | `hermes paranoy keygen` | none | Terminal only |

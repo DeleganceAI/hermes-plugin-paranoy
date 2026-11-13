@@ -51,6 +51,7 @@ provides_tools:
   - paranoy_set_capture
   - paranoy_whoami
   - paranoy_schedule_job
+  - paranoy_ranked_answer
 provides_hooks:
   - pre_llm_call
   - pre_tool_call

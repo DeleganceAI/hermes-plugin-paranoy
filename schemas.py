@@ -95,6 +95,8 @@ CONFIG_TOOLS = (
 )
 # Builds Hermes cron jobs for one role. Visible once a key is stored.
 JOB_TOOLS = ("paranoy_schedule_job",)
+# Read-only ranked answer. Registered after the other tools.
+RANKED_TOOLS = ("paranoy_ranked_answer",)
 ALL_TOOL_NAMES = (
     READ_TOOLS
     + CONTENT_TOOLS
@@ -104,6 +106,7 @@ ALL_TOOL_NAMES = (
     + PROFILE_TOOLS
     + CONFIG_TOOLS
     + JOB_TOOLS
+    + RANKED_TOOLS
 )
 
 COLLECTION_FREE = frozenset(
@@ -122,6 +125,7 @@ COLLECTION_FREE = frozenset(
         "paranoy_set_profile",
         *CONFIG_TOOLS,
         *JOB_TOOLS,
+        *RANKED_TOOLS,
     }
 )
 EXPLICIT_OWNER_TOOLS = frozenset(
@@ -161,6 +165,7 @@ SLASH_TOOLS = {
     "job list": "paranoy_schedule_job",
     "job remove": "paranoy_schedule_job",
     "capture": "paranoy_set_capture",
+    "ask": "paranoy_ranked_answer",
 }
 TERMINAL_ONLY = ("keygen",)
 ROLE_CONTENT = {
@@ -180,7 +185,7 @@ HOOKS = (
     "subagent_start",
     "subagent_stop",
 )
-SKILLS = ("reader", "contributor", "admin", "ledger", "setup", "cadence")
+SKILLS = ("reader", "contributor", "admin", "ledger", "setup", "cadence", "ranked")
 EVIDENCE_PAGE_CHARS = 20000
 EVIDENCE_CHAR_CAP = 200000
 
@@ -554,5 +559,20 @@ SCHEMAS = {
         "Show this agent's npub and its saved profile name and about, the same as /paranoy "
         "whoami and /paranoy profile. No server call and no secret.",
         {},
+    ),
+    "paranoy_ranked_answer": _schema(
+        "paranoy_ranked_answer",
+        "Answer a question from the matching Paranoy collection as a ranked evidence card, "
+        "the same as /paranoy ask. Discovers the collection from list_collections by word "
+        "overlap of the slug and topic. For the demo question 'what is the worst seed oil "
+        "and why', that is seed-oils-and-sat-fat when it is listed. Pulls the matching claims "
+        "and their links. Ranks by supporting links minus rebutting links. Qualifying links are "
+        "shown and do not change the net. Not a verdict. If no listed collection matches, or the "
+        "collection has no claim that answers the question, say so and do not invent one.",
+        {
+            "question": _str("The question to answer from the ledger, in the person's words."),
+            "collection": _str("Collection slug to use instead of discovery. It must be one this key can list."),
+        },
+        ["question"],
     ),
 }
