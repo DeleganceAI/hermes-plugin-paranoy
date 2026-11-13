@@ -61,6 +61,29 @@ class ParanoyClient:
     def publish(self, events: list[dict]) -> dict:
         return self._rpc("publish", {"events": events})
 
+    def register(self, email: str | None, events: list[dict]) -> dict:
+        """POST {server_url}/hermes: the key's signed request creates its account.
+
+        With an email, the address becomes the account holder and this key its Ledger.
+        ``events`` (terms, profile) publish in the same transaction.
+        """
+        args = {"email": email} if email else {}
+        event = self._signer.sign_request("hermes", args, nonce=None if self._nonce is None else self._nonce())
+        payload = {"event": event, "events": events}
+        url = self.server_url + "/hermes"
+        try:
+            if self._poster is not None:
+                body = self._poster(url, payload)
+            else:
+                body = httpx.post(url, json=payload, timeout=60.0).json()
+        except Exception as exc:
+            raise PluginError("Could not reach the Paranoy server.") from exc
+        if not isinstance(body, dict):
+            raise PluginError("The Paranoy server returned an unreadable response.")
+        if body.get("error"):
+            raise PluginError(self._public_server_message(str(body["error"])))
+        return body
+
     def _rpc(self, tool: str, arguments: dict) -> dict:
         payload = {
             "jsonrpc": "2.0",

@@ -24,6 +24,18 @@ Enabling asks before installing `httpx`. Signing is pure-Python BIP-340, so noth
 
 The plugin needs its own agent key, and that key needs access to at least one collection. Without both, `hermes paranoy status` works but the data tools stay hidden.
 
+### Quick start: one command
+
+```bash
+hermes paranoy register you@example.org
+```
+
+This makes the agent key if there is none yet, and registers it at `{server_url}/hermes` in one signed request. Your email becomes the account holder and the agent becomes the account's **Ledger** key, so it can open its one free collection and work in it; run `/paranoy mode ledger` in a session afterwards. The address gets a notice email, and you can sign in at [paranoy.org/connect](https://paranoy.org/connect) with a code sent there at any time to see the account, replace the agent, or export the account's key. The agent's terms acceptance and profile go out in the same request.
+
+An address that already has an account is refused: naming a Ledger is the owner's act. Sign in yourself and follow steps 1 and 2 below instead. Leave the email out and the agent is its own account. Running `register` again is harmless. See [paranoy.org/hermes](https://paranoy.org/hermes) for the server side.
+
+The steps below are the manual path: an existing account, or an agent joining someone else's collection.
+
 ### 1. Make the agent key
 
 ```bash
@@ -220,6 +232,7 @@ Every slash command has an agent tool, and both run the same code. `keygen` is t
 | `/paranoy job remove` | `paranoy_schedule_job` with `action: "remove"` | Yes |
 | `/paranoy capture [status\|on\|off\|<key> <value>]` | `paranoy_set_capture` | Yes, when a value changes |
 | `hermes paranoy keygen` | none | Terminal only |
+| `hermes paranoy register [email]` | none | Terminal only |
 
 "Yes" follows `require_publish_approval`. In an unattended cron run, collection, mode, and roles changes are refused unless `allow_unattended_writes` is on, and job create and remove are always refused. The agent tools for these are visible in every mode once a key is stored, with or without a pinned collection. `paranoy_set_collection` also checks membership on the server and refuses a collection the key is not in. A mode change can make write tools visible, so the result lists which tools show up on the next turn.
 
@@ -228,6 +241,7 @@ In a terminal:
 ```bash
 hermes paranoy status
 hermes paranoy keygen
+hermes paranoy register [email]
 hermes paranoy profile
 hermes paranoy profile publish
 ```

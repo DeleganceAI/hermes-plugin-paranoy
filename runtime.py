@@ -97,6 +97,24 @@ def publish(service, settings: dict, events: list[dict]) -> dict:
     return result
 
 
+def register_account(service, settings: dict, email: str | None) -> str:
+    """Register this key at /hermes with its terms and profile. Returns a line for the owner."""
+    email = str(email or "").strip() or None
+    result = service.register(email, [terms_event(service, settings), profile_event(service, settings)])
+    state.update_state(terms_published=True, profile_published_at=now_iso())
+    server = str(settings.get("server_url") or schemas.DEFAULTS["server_url"]).rstrip("/")
+    lines = [("Registered" if result.get("registered") else "Already registered") + f" on Paranoy as {service.npub}."]
+    if email:
+        lines.append(
+            f"{email} holds the account and this agent is its Ledger. A notice was emailed there; "
+            f"sign in at {server}/connect with that address to see and change everything."
+        )
+        lines.append("Next: /paranoy mode ledger in a Hermes session.")
+    else:
+        lines.append("This agent is its own account, with one collection on the free plan.")
+    return "\n".join(lines)
+
+
 def page_event(service, event_id: str) -> dict:
     """Read one event, following evidence text windows up to the cap."""
     offset = 0

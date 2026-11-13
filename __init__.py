@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import capture, gates, schemas, state
 from .client import ParanoyClient, PluginError
-from .runtime import now_iso
+from .runtime import now_iso, register_account
 from .signing import SecretError, generate_and_store, load_secret_hex
 from .tools import config, governance, profile, read, write
 from .tools import jobs as job_tools
@@ -79,29 +79,56 @@ def register(ctx):
         args_hint="status|collection|mode|roles|whoami|profile [name|about|publish]|job [create|list|remove]",
     )
 
+    def keygen() -> str | None:
+        """Make and store a key; return its hex only to this process, for register's first run."""
+        stored = {}
+
+        def save(key, value):
+            from hermes_cli.config import save_env_value
+
+            save_env_value(key, value)
+            stored["hex"] = value
+
+        print(generate_and_store(save))
+        return stored.get("hex")
+
     def cli(args) -> None:
         command = getattr(args, "paranoy_command", None)
         if command == "status":
             print(slash("status"))
             return
         if command == "keygen":
-            def save(key, value):
-                from hermes_cli.config import save_env_value
-
-                save_env_value(key, value)
-
-            print(generate_and_store(save))
+            keygen()
+            return
+        if command == "register":
+            settings = settings_factory()
+            try:
+                if settings.get("key_configured"):
+                    service = service_factory(settings)
+                else:  # first run makes the key, so the owner types one command
+                    secret_hex = keygen()
+                    if not secret_hex:
+                        return
+                    service = ParanoyClient(settings["server_url"], secret_hex)
+                print(register_account(service, settings, getattr(args, "email", None)))
+            except PluginError as exc:
+                print(f"Registration failed: {exc}")
             return
         if command == "profile":
             extra = " ".join(getattr(args, "profile_args", None) or [])
             print(slash(("profile " + extra).strip()))
             return
-        print("Usage: hermes paranoy <status|keygen|profile>")
+        print("Usage: hermes paranoy <status|keygen|register [email]|profile>")
 
     def setup_cli(subparser) -> None:
         subs = subparser.add_subparsers(dest="paranoy_command")
         subs.add_parser("status", help="Show mode, npub, and whether a key is configured")
         subs.add_parser("keygen", help="Generate an agent key and store it with Hermes")
+        register_parser = subs.add_parser(
+            "register",
+            help="Create this agent's Paranoy account; with your email, you hold it and the agent is its Ledger",
+        )
+        register_parser.add_argument("email", nargs="?")
         profile_parser = subs.add_parser(
             "profile",
             help="Show, set, or publish the agent profile: [name <text>|about <text>|publish]",
