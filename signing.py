@@ -110,14 +110,14 @@ def secret_to_hex(stored: str) -> str:
 
 def load_secret_hex() -> str:
     """Read PARANOY_BOT_SECRET_HEX from Hermes. Callers must not log the result."""
-    from . import schemas
+    from . import settings
 
     try:
         from agent.secret_scope import get_secret
     except Exception as exc:
         raise SecretError("Hermes secret storage is not available.") from exc
     try:
-        raw = get_secret(schemas.SECRET_ENV)
+        raw = get_secret(settings.SECRET_ENV)
     except Exception as exc:
         raise SecretError("Hermes secret storage is not available.") from exc
     if raw is None or not str(raw).strip():
@@ -178,18 +178,18 @@ class Signer:
 
 def generate_and_store(save) -> str:
     """Create a key, hand the hex to Hermes' saver, and return only the npub."""
-    from . import schemas
+    from . import settings
 
     secret_hex = secrets.token_bytes(32).hex()
     npub = Signer(secret_hex).npub
     try:
-        save(schemas.SECRET_ENV, secret_hex)
+        save(settings.SECRET_ENV, secret_hex)
     except Exception:
         return (
             "A key was generated but Hermes could not store it. "
             "Nothing was saved and no secret was printed. Run keygen again inside Hermes."
         )
-    return f"Stored a new agent key with Hermes as {schemas.SECRET_ENV}. npub: {npub}"
+    return f"Stored a new agent key with Hermes as {settings.SECRET_ENV}. npub: {npub}"
 
 
 def verify_event(event: dict) -> bool:

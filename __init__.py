@@ -1,83 +1,99 @@
-"""Paranoy native Hermes plugin. Signs on the agent's behalf."""
+"""Paranoy native Hermes plugin: capture, ground, five tools, and /decide. See SPEC.md."""
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 from pathlib import Path
 
-from . import capture, gates, schemas, state
+from . import capture, client, ground, ledger, settings, signing, state, tools
 from .client import ParanoyClient, PluginError
-from .runtime import now_iso, register_account
 from .signing import SecretError, generate_and_store, load_secret_hex
-from .tools import config, governance, profile, read, write
-from .tools import jobs as job_tools
-from .tools.read import status as live_status
+
+__all__ = ["capture", "client", "ground", "ledger", "register", "settings", "signing", "state", "tools"]
 
 logger = logging.getLogger(__name__)
-_NSEC = re.compile(r"nsec1[02-9ac-hj-np-z]+")
+
+USAGE = "Usage: /paranoy [status | collection <slug> | capture on|off | ground on|off]"
+
+
+def status_text(current: dict, service_factory) -> str:
+    lines = [f"server: {current['server_url']}"]
+    if not current["key_configured"]:
+        return "\n".join(lines + ["key: none. Run `hermes paranoy register <email>` in a terminal."])
+    try:
+        service = service_factory(current)
+        lines.append(f"npub: {service.npub}")
+        rows = service.call("list_collections", {}).get("result") or []
+        slugs = [row.get("slug") for row in rows if isinstance(row, dict)]
+    except PluginError as exc:
+        return "\n".join(lines + [f"server said: {exc}"])
+    collection = current["collection"]
+    if not collection:
+        lines.append("collection: none. Run /paranoy collection <slug>. This key can use: " + (", ".join(slugs) or "none yet"))
+    elif collection in slugs:
+        lines.append(f"collection: {collection}")
+    else:
+        lines.append(f"collection: {collection} (this key is not a member; a new slug is created on the first write)")
+    lines.append(f"capture: {'on' if current['capture'] else 'off'}")
+    lines.append(f"ground: {'on' if current['ground'] else 'off'}")
+    return "\n".join(lines)
 
 
 def register(ctx):
-    """Register skills, commands, hooks, and tools.
-
-    A missing PARANOY_BOT_SECRET_HEX does not stop registration. Data tools
-    stay hidden until a key is stored and, where the mode needs one, a
-    collection is pinned.
-    """
+    """Register the skills, commands, hooks, and tools. A missing key does not stop this."""
     skills_dir = Path(__file__).resolve().parent / "skills"
-    descriptions = {
-        "reader": "Read one pinned Paranoy collection. No writes.",
-        "contributor": "Contribute to one pinned Paranoy collection in the assigned roles.",
-        "admin": "Administer Paranoy collections this key owns or administers. No content writes.",
-        "ledger": "Account-wide steward for the owner's Paranoy ledger.",
-        "setup": (
-            "Set up this Paranoy agent: npub and status, getting added to a collection, "
-            "setting the profile name, and why the ledger is not visible."
-        ),
-        "cadence": (
-            "Recurring Paranoy jobs as one role in one collection, for example an hourly "
-            "Scout adding 50 items. Create, list, and remove them."
-        ),
-    }
-    for skill_name in schemas.SKILLS:
-        ctx.register_skill(
-            skill_name,
-            skills_dir / skill_name / "SKILL.md",
-            description=descriptions[skill_name],
-        )
+    for name, description in (
+        ("decide", "The Paranoy-grounded decision procedure that /decide runs."),
+        ("setup", "Set up this Paranoy agent: key, account, collection, and common errors."),
+    ):
+        ctx.register_skill(name, skills_dir / name / "SKILL.md", description=description)
 
-    def settings_factory():
-        return gates.read_settings(ctx)
+    def settings_factory() -> dict:
+        return settings.read(ctx)
 
-    def service_factory(settings):
+    def service_factory(current: dict) -> ParanoyClient:
         try:
-            secret_hex = load_secret_hex()
+            return ParanoyClient(current["server_url"], load_secret_hex())
         except SecretError as exc:
             raise PluginError(str(exc)) from exc
-        return ParanoyClient(settings["server_url"], secret_hex)
 
-    def slash(raw_args: str = "", **kwargs) -> str:
-        del kwargs
+    # ------------------------------------------------------------- commands
+
+    def never_raises(handler):
+        def safe(raw_args: str = "", **kwargs) -> str:
+            try:
+                return handler(raw_args, **kwargs)
+            except PluginError as exc:
+                return str(exc)
+            except Exception:
+                logger.exception("paranoy command failed")
+                return "The Paranoy command failed unexpectedly."
+
+        return safe
+
+    @never_raises
+    def paranoy(raw_args: str = "", **kwargs) -> str:
         parts = (raw_args or "").split()
         command = parts[0].lower() if parts else "status"
-        settings = settings_factory()
-        if command == "status" and len(parts) == 1 and settings.get("key_configured"):
-            try:
-                payload = live_status(service_factory(settings), settings, {})
-                return json.dumps(payload, ensure_ascii=False)
-            except PluginError as exc:
-                return gates.status_text(settings) + "\nserver: " + str(exc)
-        # Every subcommand has an agent tool too; see schemas.SLASH_TOOLS.
-        return gates.slash_result(ctx, raw_args, service_factory)
+        value = parts[1].lower() if len(parts) > 1 else ""
+        if command == "status":
+            return status_text(settings_factory(), service_factory)
+        if command == "collection" and settings.SLUG.fullmatch(value):
+            settings.save(ctx, "collection", value)
+            return status_text(settings_factory(), service_factory)
+        if command in ("capture", "ground") and value in ("on", "off"):
+            settings.save(ctx, command, value == "on")
+            return f"{command}: {value}"
+        return USAGE
 
-    ctx.register_command(
-        "paranoy",
-        handler=slash,
-        description="Paranoy status, collection, mode, roles, whoami, profile, and jobs",
-        args_hint="status|collection|mode|roles|whoami|profile [name|about|publish]|job [create|list|remove]",
-    )
+    @never_raises
+    def decide(raw_args: str = "", **kwargs) -> str:
+        return ground.decide(raw_args, str(kwargs.get("session_id") or ""), settings_factory(), service_factory)
+
+    ctx.register_command("paranoy", handler=paranoy, description="Paranoy status and settings",
+                         args_hint="status|collection <slug>|capture on|off|ground on|off")
+    ctx.register_command("decide", handler=decide, description="Make a decision grounded in the Paranoy ledger",
+                         args_hint="<question>|done")
 
     def keygen() -> str | None:
         """Make and store a key; return its hex only to this process, for register's first run."""
@@ -95,175 +111,83 @@ def register(ctx):
     def cli(args) -> None:
         command = getattr(args, "paranoy_command", None)
         if command == "status":
-            print(slash("status"))
-            return
-        if command == "keygen":
+            print(paranoy("status"))
+        elif command == "keygen":
             keygen()
-            return
-        if command == "register":
-            settings = settings_factory()
+        elif command == "register":
+            current = settings_factory()
             try:
-                if settings.get("key_configured"):
-                    service = service_factory(settings)
+                if current["key_configured"]:
+                    service = service_factory(current)
                 else:  # first run makes the key, so the owner types one command
                     secret_hex = keygen()
                     if not secret_hex:
                         return
-                    service = ParanoyClient(settings["server_url"], secret_hex)
-                print(register_account(service, settings, getattr(args, "email", None)))
+                    service = ParanoyClient(current["server_url"], secret_hex)
+                print(ledger.register_account(service, current, getattr(args, "email", None)))
             except PluginError as exc:
                 print(f"Registration failed: {exc}")
-            return
-        if command == "profile":
-            extra = " ".join(getattr(args, "profile_args", None) or [])
-            print(slash(("profile " + extra).strip()))
-            return
-        print("Usage: hermes paranoy <status|keygen|register [email]|profile>")
+        else:
+            print("Usage: hermes paranoy <status|keygen|register [email]>")
 
     def setup_cli(subparser) -> None:
         subs = subparser.add_subparsers(dest="paranoy_command")
-        subs.add_parser("status", help="Show mode, npub, and whether a key is configured")
+        subs.add_parser("status", help="Show the npub, collection, and whether capture and grounding are on")
         subs.add_parser("keygen", help="Generate an agent key and store it with Hermes")
-        register_parser = subs.add_parser(
-            "register",
-            help="Create this agent's Paranoy account; with your email, you hold it and the agent is its Ledger",
-        )
-        register_parser.add_argument("email", nargs="?")
-        profile_parser = subs.add_parser(
-            "profile",
-            help="Show, set, or publish the agent profile: [name <text>|about <text>|publish]",
-        )
-        profile_parser.add_argument("profile_args", nargs="*")
+        subs.add_parser(
+            "register", help="Create this agent's Paranoy account; with your email, you hold it"
+        ).add_argument("email", nargs="?")
         subparser.set_defaults(func=cli)
 
-    ctx.register_cli_command(
-        name="paranoy",
-        help="Paranoy ledger status and key setup",
-        setup_fn=setup_cli,
-        handler_fn=cli,
-    )
+    ctx.register_cli_command(name="paranoy", help="Paranoy status and key setup", setup_fn=setup_cli, handler_fn=cli)
+
+    # ---------------------------------------------------------------- hooks
 
     def pre_llm_call(**kwargs):
-        # Terminal-mode evidence capture: the gateway path handles messaging
-        # platforms; pre_llm_call fires once per turn on every surface, so
-        # the strictly-terminal check inside keeps the two paths disjoint.
+        """Once per turn: capture a terminal message in the background, then ground the reply."""
         try:
-            payload = capture.terminal_payload(kwargs, ctx, settings_factory)
-            if payload is not None:
-                capture.start_inbound_thread(payload, ctx, settings_factory, service_factory)
+            current = settings_factory()
+            if current["ready"] and current["capture"]:
+                payload = capture.terminal_payload(kwargs, ctx, current)
+                if payload:
+                    capture.start(payload, ctx, current, service_factory)
+            block = ground.context(kwargs, ctx, current, service_factory)
+            return {"context": block} if block else None
         except Exception:
-            pass
-        try:
-            return {"context": gates.prompt_context(settings_factory())}
-        except Exception:
+            logger.warning("paranoy pre_llm_call failed", exc_info=True)
             return None
-
-    def subagent_start(**kwargs):
-        capture.note_subagent_started(kwargs.get("child_session_id"))
-        return None
-
-    def subagent_stop(**kwargs):
-        capture.note_subagent_stopped(kwargs.get("child_session_id"))
-        return None
-
-    def pre_tool_call(**kwargs):
-        return gates.pre_tool_directive(ctx, kwargs.get("tool_name"), kwargs.get("args"))
-
-    def post_tool_call(**kwargs):
-        name = gates.bare_tool_name(kwargs.get("tool_name"))
-        if name not in schemas.ALL_TOOL_NAMES:
-            return None
-        raw = kwargs.get("result")
-        if not isinstance(raw, str):
-            return None
-        cleaned = _NSEC.sub("[redacted]", raw)
-        try:
-            payload = json.loads(cleaned)
-        except ValueError:
-            return None
-        if not isinstance(payload, dict) or payload.get("error"):
-            return None
-        accepted = payload.get("accepted")
-        if isinstance(accepted, list) and accepted:
-            state.append_jsonl(
-                "accepted.jsonl",
-                {"tool": name, "ids": accepted, "at": now_iso()},
-            )
-        try:
-            settings = settings_factory()
-        except Exception:
-            settings = {}
-        role = settings.get("active_role") or settings.get("mode") or "none"
-        state.checkpoint(
-            role,
-            {
-                "tool": name,
-                "at": now_iso(),
-                "collection": settings.get("collection") or "",
-                "overview": name == "paranoy_update_overview",
-            },
-        )
-        return None
-
-    ctx.register_hook("pre_llm_call", pre_llm_call)
-    ctx.register_hook("pre_tool_call", pre_tool_call)
-    ctx.register_hook("post_tool_call", post_tool_call)
 
     def post_gateway_admission(**kwargs):
-        """Capture a message Hermes has already admitted. Return None so the turn runs.
-
-        The hook receives ``source``, ``text``, and ``message_id`` (plus
-        ``platform`` and ``session_key``). It must not return
-        ``{"action": "handled"}``.
-        """
+        """Capture a message Hermes has admitted. Returns None so the turn runs."""
         try:
-            payload = capture.inbound_payload(kwargs, ctx, settings_factory)
-            if payload is not None:
-                capture.start_inbound_thread(payload, ctx, settings_factory, service_factory)
+            current = settings_factory()
+            if current["ready"] and current["capture"]:
+                payload = capture.gateway_payload(kwargs, current)
+                if payload:
+                    capture.start(payload, ctx, current, service_factory)
         except Exception:
-            logger.warning("paranoy capture: post_gateway_admission failed", exc_info=True)
-        return None
+            logger.warning("paranoy post_gateway_admission failed", exc_info=True)
 
-    ctx.register_hook("post_gateway_admission", post_gateway_admission)
-    ctx.register_hook("subagent_start", subagent_start)
-    ctx.register_hook("subagent_stop", subagent_stop)
+    def transform_llm_output(**kwargs):
+        return ground.append_warnings(kwargs.get("response_text"), kwargs.get("session_id"))
 
-    def llm_execution_middleware(**kwargs):
-        return capture.llm_execution(
-            ctx=ctx,
-            settings_factory=settings_factory,
-            service_factory=service_factory,
-            **kwargs,
-        )
-
-    ctx.register_middleware("llm_execution", llm_execution_middleware)
-
-    def make_check(tool_name):
-        def check_fn() -> bool:
-            try:
-                return gates.tool_visible(settings_factory(), tool_name)
-            except Exception:
-                return False
-
-        return check_fn
-
-    def save_setting(key, value):
-        gates.save_setting(ctx, key, value)
-
-    for spec in (
-        *read.build(service_factory, settings_factory),
-        *write.build(service_factory, settings_factory),
-        *governance.build(service_factory, settings_factory),
-        *profile.build(service_factory, settings_factory, save_setting),
-        *config.build(service_factory, settings_factory, save_setting),
-        *job_tools.build(service_factory, settings_factory),
+    for name, hook in (
+        ("pre_llm_call", pre_llm_call),
+        ("post_gateway_admission", post_gateway_admission),
+        ("transform_llm_output", transform_llm_output),
+        ("subagent_start", lambda **kw: capture.note_subagent_started(kw.get("child_session_id"))),
+        ("subagent_stop", lambda **kw: capture.note_subagent_stopped(kw.get("child_session_id"))),
     ):
-        ctx.register_tool(
-            name=spec["name"],
-            toolset="paranoy",
-            schema=spec["schema"],
-            handler=spec["handler"],
-            check_fn=make_check(spec["name"]),
-        )
+        ctx.register_hook(name, hook)
 
-    logger.debug("paranoy registered %d tools", len(schemas.ALL_TOOL_NAMES))
+    # ---------------------------------------------------------------- tools
+
+    def ready() -> bool:
+        try:
+            return settings_factory()["ready"]
+        except Exception:
+            return False
+
+    for spec in tools.build(ctx, settings_factory, service_factory):
+        ctx.register_tool(name=spec["name"], toolset="paranoy", schema=spec["schema"],
+                          handler=spec["handler"], check_fn=ready)
