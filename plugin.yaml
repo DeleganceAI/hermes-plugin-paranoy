@@ -1,14 +1,15 @@
 name: paranoy
-version: "0.4.1"
+version: "0.5.0"
 manifest_version: 2
 api_version: 1
 description: >
-  Native Hermes plugin for a Paranoy evidence ledger. The agent key stays in
-  Hermes as PARANOY_BOT_SECRET_HEX; the model never holds it. Reads and
-  allowed writes are signed in-process and sent to server_url/mcp over
-  HTTPS. fetch_url asks that server to fetch public http(s) documents.
-  Rejects, the Ponder journal, role checkpoints, and overview.md are written
-  under the Hermes plugin data directory.
+  Grounds a Hermes agent in a Paranoy evidence ledger. What people say is
+  stored as evidence in the background, every reply searches the ledger
+  first, and /decide runs a decision from what is on record. The agent key
+  stays in Hermes as PARANOY_BOT_SECRET_HEX; the model never holds it.
+  Calls are signed in-process and sent to server_url/mcp over HTTPS. A
+  journal of captures, searches and writes is kept under the Hermes plugin
+  data directory.
 author: DeleganceAI
 license: GPL-3.0
 homepage: https://github.com/DeleganceAI/hermes-plugin-paranoy
@@ -17,197 +18,65 @@ tags: [ledger, nostr, paranoy]
 python_dependencies:
   - "httpx>=0.27,<0.29"
 provides_tools:
-  - paranoy_list_collections
-  - paranoy_list_members
-  - paranoy_list_delegations
-  - paranoy_search_claims
-  - paranoy_list_claims
-  - paranoy_list_evidence
-  - paranoy_get_event
-  - paranoy_get_links
-  - paranoy_search_contradictions
+  - paranoy_search
+  - paranoy_read
+  - paranoy_ingest
+  - paranoy_store_evidence
+  - paranoy_store_claim
   - paranoy_check_proof
-  - paranoy_fetch_url
-  - paranoy_status
-  - paranoy_add_evidence
-  - paranoy_add_claim
-  - paranoy_add_link
-  - paranoy_add_contradiction
-  - paranoy_log_reject
-  - paranoy_journal
-  - paranoy_set_active_role
-  - paranoy_set_topic
-  - paranoy_add_members
-  - paranoy_remove_members
-  - paranoy_set_admins
-  - paranoy_create_collection
-  - paranoy_update_overview
-  - paranoy_set_collection_agents
-  - paranoy_set_account_agents
-  - paranoy_set_profile
-  - paranoy_set_collection
-  - paranoy_set_mode
-  - paranoy_set_roles
-  - paranoy_set_capture
-  - paranoy_whoami
-  - paranoy_schedule_job
 provides_hooks:
   - pre_llm_call
-  - pre_tool_call
-  - post_tool_call
   - post_gateway_admission
+  - transform_llm_output
   - subagent_start
   - subagent_stop
-provides_middleware:
-  - llm_execution
 config_schema:
-  capture_enabled:
-    type: bool
-    default: false
-    label: Capture enabled
-    description: >
-      Automatically file human messages as evidence and extract claims from
-      the agent's final answers. Off by default; enabling it is the person's
-      approval for automatic publishing.
-  capture_extract:
-    type: bool
-    default: true
-    label: Capture claim extraction
-    description: Extract contestable world-claims from the agent's final answers.
-  capture_rewrite:
-    type: bool
-    default: true
-    label: Capture rewrite
-    description: >
-      Rewrite the final answer once against claims retrieved from the
-      collection so it is consistent with and cites the ledger.
-  capture_platforms:
-    type: str
-    default: "slack,terminal"
-    label: Capture platforms
-    description: >
-      Comma-separated gateway platforms whose human messages are captured
-      ("all" for every platform; "terminal" covers the CLI and platforms
-      with no name). The answer
-      rewrite applies to these platforms too.
-  capture_collection:
-    type: str
-    default: ""
-    label: Capture collection
-    description: >
-      Collection the capture pipeline publishes to. Empty uses the pinned
-      collection.
-  capture_permalink_base:
-    type: str
-    default: ""
-    label: Capture permalink base
-    description: >
-      Slack workspace base URL, for example https://yourteam.slack.com, used
-      to build evidence permalinks. Empty omits the url field.
-  capture_max_claims:
-    type: int
-    default: 3
-    label: Capture max claims
-    description: Cap on claims published per message or answer.
-  capture_retrieval_limit:
-    type: int
-    default: 8
-    label: Capture retrieval limit
-    description: Claims retrieved for the rewrite pass.
-  capture_dupe_distance:
-    type: float
-    default: 0.15
-    label: Capture duplicate distance
-    description: >
-      Cosine-distance threshold for the vector near-duplicate check on new
-      claims. A candidate within this distance of an existing claim is
-      skipped. Measured on the collection's own embeddings: verbatim 0.06,
-      paraphrase 0.09-0.14, related-but-different 0.18+.
-  capture_terminal_source:
-    type: str
-    default: ""
-    label: Capture terminal source
-    description: >
-      The source name recorded on evidence captured from terminal-mode
-      human messages. Empty falls back to the owner setting, then
-      "terminal".
   server_url:
     type: str
     default: "https://paranoy.org"
     label: Server URL
-    description: Paranoy server base URL. Tool calls go to this origin plus /mcp.
+    description: Paranoy server base URL. Calls go to this origin plus /mcp.
   collection:
     type: str
     default: ""
     label: Collection
+    description: The one collection the agent reads and writes. Set with /paranoy collection.
+  owner_name:
+    type: str
+    default: ""
+    label: Owner name
     description: >
-      Pinned collection slug. Required for reader and contributor. Optional
-      for ledger. For admin, must belong to the managed set when that set
-      is non-empty. Set with /paranoy collection, or by the agent with
-      paranoy_set_collection after a person approves.
-  collections:
-    type: str
-    default: ""
-    label: Collections
+      Recorded as the source of messages captured in a terminal session,
+      where Hermes gives no display name.
+  capture:
+    type: bool
+    default: true
+    label: Capture
     description: >
-      Comma-separated collection slugs. Admin only. Empty means every
-      collection this key administers.
-  mode:
-    type: str
-    default: reader
-    choices: [reader, contributor, admin, ledger]
-    label: Mode
-    description: reader, contributor, admin, or ledger. Default is reader.
-  roles:
+      Store what people say as evidence, in the background. Messages that
+      are small talk, questions or instructions are skipped.
+  ground:
+    type: bool
+    default: true
+    label: Ground
+    description: Search the ledger before every reply and give the agent what it finds.
+  permalink_base:
     type: str
     default: ""
-    label: Roles
+    label: Slack permalink base
     description: >
-      Comma-separated contributor roles: Scout, Claim Miner, Linker, Gap
-      Finder, Fool, Ponder, Ledger. The Ledger role maintains one collection.
-      It is not ledger mode.
-  owner:
-    type: str
-    default: ""
-    label: Owner
-    description: Who this agent works for. Blank means the owner. Filled into skill context on each turn.
-  report_to:
-    type: str
-    default: ""
-    label: Report to
-    description: Who receives short pass summaries.
+      For example https://yourteam.slack.com. When set, captured Slack
+      messages carry a link back to the message.
   agent_name:
     type: str
     default: ""
     label: Agent name
-    description: >
-      Name for the kind 0 agent profile. Published with the first allowed
-      write, or on demand with /paranoy profile publish or paranoy_set_profile.
+    description: Name for the agent's profile, published with its first write.
   agent_about:
     type: str
     default: ""
     label: Agent about
-    description: About text for the kind 0 profile. Say that this key is an agent.
-  require_publish_approval:
-    type: bool
-    default: true
-    label: Require publish approval
-    description: >
-      Ask a person before content or governance writes, and before the agent
-      changes the collection, mode, or roles.
-  allow_unattended_writes:
-    type: bool
-    default: false
-    label: Allow unattended writes
-    description: >
-      Allow writes and agent setting changes during cron when nobody can
-      answer. Also turn off require publish approval for those runs. Default
-      refuses them.
-  auto_sign_terms:
-    type: bool
-    default: true
-    label: Auto-sign terms
-    description: Sign kind 4706 terms and a kind 0 profile before the first allowed write.
+    description: About text for the profile. Say that this key is an agent.
   terms_version:
     type: str
     default: "1"

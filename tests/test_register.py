@@ -6,7 +6,7 @@ from pathlib import Path
 from tests.support import load_plugin
 
 plugin = load_plugin()
-runtime = plugin.runtime
+ledger = plugin.ledger
 state = plugin.state
 signing = plugin.signing
 ParanoyClient = plugin.client.ParanoyClient
@@ -34,7 +34,7 @@ class RegisterTest(unittest.TestCase):
 
     def test_email_registration_posts_signed_request_with_terms_and_profile(self):
         service = self.client({"registered": True, "npub": "npub1x"})
-        text = runtime.register_account(service, {"agent_name": "scout"}, " owner@example.org ")
+        text = ledger.register_account(service, {"agent_name": "scout"}, " owner@example.org ")
         url, payload = self.posts[0]
         self.assertEqual(url, "https://paranoy.test/hermes")
         request = payload["event"]
@@ -47,18 +47,18 @@ class RegisterTest(unittest.TestCase):
         self.assertTrue(all(e["pubkey"] == request["pubkey"] for e in payload["events"]))
         self.assertTrue(state.load_state().get("terms_published"))
         self.assertIn("owner@example.org holds the account", text)
-        self.assertIn("/paranoy mode ledger", text)
+        self.assertIn("/paranoy collection <slug>", text)
 
     def test_without_email_the_agent_is_its_own_account(self):
         service = self.client({"registered": False})
-        text = runtime.register_account(service, {}, None)
+        text = ledger.register_account(service, {}, None)
         self.assertEqual(json.loads(self.posts[0][1]["event"]["content"])["args"], {})
         self.assertTrue(text.startswith("Already registered"))
 
     def test_server_refusal_is_a_plugin_error_and_marks_nothing(self):
         service = self.client({"error": "an account already exists for this address"})
         with self.assertRaises(PluginError) as caught:
-            runtime.register_account(service, {}, "owner@example.org")
+            ledger.register_account(service, {}, "owner@example.org")
         self.assertIn("already exists", str(caught.exception))
         self.assertFalse(state.load_state().get("terms_published"))
 

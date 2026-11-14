@@ -82,7 +82,7 @@ class SigningTests(unittest.TestCase):
             stored["value"] = value
 
         text = plugin.signing.generate_and_store(save)
-        self.assertEqual(stored["key"], plugin.schemas.SECRET_ENV)
+        self.assertEqual(stored["key"], plugin.settings.SECRET_ENV)
         self.assertNotIn(stored["value"], text)
         self.assertNotIn("nsec1", text)
         self.assertIn("npub1", text)

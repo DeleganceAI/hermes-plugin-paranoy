@@ -39,6 +39,7 @@ class ParanoyClient:
         self._nonce = nonce or None
         self._poster = poster
         self._secret_hex = secret_hex
+        self.timeout = 60.0
 
     def __repr__(self) -> str:
         return f"ParanoyClient(server_url={self.server_url!r})"
@@ -102,7 +103,7 @@ class ParanoyClient:
                         "Accept": "application/json, text/event-stream",
                     },
                     json=payload,
-                    timeout=60.0,
+                    timeout=self.timeout,
                 )
                 body = response.json()
         except PluginError:
