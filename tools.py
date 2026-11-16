@@ -144,8 +144,14 @@ SPECS = [
       "title": {"type": "string"}, "url": {"type": "string"}, "retrieved_via": {"type": "string"}},
      ["text", "source"]),
     (store_claim, "paranoy_store_claim",
-     ("Store one claim: a single statement about the world, readable alone, no stronger than its source. A claim "
-     "needs no evidence. Add link only when the evidence is already in this conversation and you have its id; "
+     ("Store one claim, written to this standard. One statement: split compound sentences. Readable alone: names "
+     "in place of pronouns, and keep the date, version or condition the source gives. No stronger than its source: "
+     "keep its scope and its hedges. Checkable: someone could describe evidence that would count against it. About "
+     "the world, in the third person: the evidence record says who said it and the claim says what was said, so do "
+     "not write \"the author wrote that...\". Name the speaker only when the statement itself is the fact, as with "
+     "a person's or company's public statement. Faithful: it says what the source says and adds nothing. Not a "
+     "duplicate: search the collection for it first, and link the existing claim instead of storing it again. A "
+     "claim needs no evidence. Add link only when the evidence is already in this conversation and you have its id; "
      "never search or list evidence to find something to link. Pass claim_id in place of text to link evidence to "
      "an existing claim. link.quote is optional: include it only to point at a passage in a long document."),
      {"text": {"type": "string"}, "claim_id": _ID,

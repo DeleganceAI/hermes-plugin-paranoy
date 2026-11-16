@@ -125,7 +125,9 @@ Each claim must be:
 - No stronger than the text. Keep its scope and its hedges.
 - Checkable. Someone could describe evidence that would count against it. Drop it otherwise.
 - About the world, in the third person. Do not write "the speaker said" or "the document says".
-- Faithful. It says what the text says and adds nothing."""
+- Faithful. It says what the text says and adds nothing.
+
+Attribution belongs in the evidence record, not in the claim. "Don Muir wrote that buyers' questions have shifted toward data ownership" is wrong. "Over the year before July 2026, institutional AI buyers' questions shifted toward where their data goes" is right, and the date carries the scope the source gave. The exception is a statement that is itself the fact. Then name the speaker: "Anthropic has said there will be no winner-take-all in AI models" records a company's public position, which is an event in the world."""
 
 _EXTRACT_SCHEMA = {
     "type": "object",
