@@ -295,7 +295,7 @@ one.
 
 #### Claim quality
 
-`ingest` and capture use the same standard. A claim is published only if it is:
+`ingest`, capture and `store_claim` use the same standard. A claim is published only if it is:
 
 - **One statement.** Split compound sentences.
 - **Readable alone.** Names in place of pronouns, with the date, version or
@@ -311,6 +311,18 @@ one.
   A close match is reused only when the model reading both confirms they
   say the same thing. Closeness in the search is not enough, since a claim
   and its opposite are close.
+
+The standard also applies to a claim the agent writes by hand with
+`store_claim`. The tool's description carries it in full, since that is the
+only guidance the agent sees at that point.
+
+Attribution belongs in the evidence record, not in the claim. "Don Muir wrote
+that buyers' questions have shifted toward data ownership" is wrong. "Over the
+year before July 2026, institutional AI buyers' questions shifted toward where
+their data goes" is right, and the date carries the scope the source gave. The
+exception is a statement that is itself the fact. Then name the speaker:
+"Anthropic has said there will be no winner-take-all in AI models" records a
+company's public position, which is an event in the world.
 
 A message or document produces as many claims as it supports. There is no
 cap.
